@@ -909,6 +909,36 @@
   ];
 
   /**
+   * Quest-complete flag (me.<flag>) for each quest script. SoloPlay's shouldRun() keeps saying "yes" for
+   * scripts it also farms for exp (mephisto, diablo, baal, andariel...), so that can't tell us the quest is done.
+   */
+  const questFlags = {
+    den: "den", bloodraven: "bloodraven", tristram: "cain", countess: "countess", smith: "smith",
+    andariel: "andariel", radament: "radament", summoner: "summoner", duriel: "duriel", lamessen: "lamessen",
+    travincal: "travincal", mephisto: "mephisto", izual: "izual", hellforge: "hellforge", diablo: "diablo",
+    shenk: "shenk", savebarby: "savebarby", anya: "anya", ancients: "ancients", baal: "baal",
+  };
+
+  /**
+   * Is this script's quest still not done for us?
+   * Quests with a flag use the flag; item quests without one (cube, amulet, staff, khalim parts) use shouldRun;
+   * pure farming/leveling runs never count as "not done".
+   * @param {string} script
+   */
+  const questNotDone = function (script) {
+    let flag = questFlags[script];
+    if (flag) {
+      try {
+        if (typeof me[flag] === "boolean") return !me[flag];
+      } catch (e) {
+        // fall through
+      }
+    }
+    if (questScripts.includes(script) && !flag) return stillNeeds(script);
+    return false;
+  };
+
+  /**
    * Follower: after we ran a quest script ourselves in a party game, remember if it still isn't done.
    * Enough failures in a row puts us in catch-up mode (solo games) from the next game on.
    * @param {string} script
@@ -916,7 +946,7 @@
   const noteAttempt = function (script) {
     if (!isFollower || !questScripts.includes(script)) return;
     let data = Party.readStuck();
-    if (stillNeeds(script)) {
+    if (questNotDone(script)) {
       data.scripts[script] = (data.scripts[script] || 0) + 1;
       log(me.name + " failed " + script + " in a party game (" + data.scripts[script] + "/" + settings.CatchUpAfterFails + ")", true);
       if (data.scripts[script] >= settings.CatchUpAfterFails) {
@@ -942,7 +972,7 @@
 
     data.catchUpGames += 1;
     before.forEach(function (script) {
-      if (!stillNeeds(script)) {
+      if (!questNotDone(script)) {
         delete data.scripts[script];
         log(me.name + " caught up on " + script, true);
       }
@@ -1452,7 +1482,8 @@
 
     if (pending.includes(leader)) return leader;
     if (pending.length) return pending[0];
-    return isLeader ? "" : leader;
+    // everyone's finished this step - wait for the next plan instead of chasing the host across acts
+    return "";
   };
 
   /**
@@ -1767,9 +1798,9 @@
             // leader is doing it too - stick to the leader and fight together instead of running our own copy
             followLeaderThrough(ls.step, ls.script);
             // the leader did the work - if all that's left is talking to an npc, just do that
-            let stillNeed = stillNeeds(ls.script);
+            let stillNeed = questNotDone(ls.script);
             if (stillNeed && collectReward(ls.script)) {
-              stillNeed = stillNeeds(ls.script);
+              stillNeed = questNotDone(ls.script);
             }
             // still need it after that (no quest credit, etc)? run it ourselves, leader will come help
             if (stillNeed && Party.inGame(leader)) {
@@ -2153,7 +2184,7 @@
       let stuck = Party.readStuck();
       let changed = false;
       Object.keys(stuck.scripts).forEach(function (script) {
-        if (!stillNeeds(script)) {
+        if (!questNotDone(script)) {
           delete stuck.scripts[script];
           changed = true;
         }
