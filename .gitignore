@@ -19,3 +19,6 @@ Settings/AdvancedSettings.js
 Settings/Settings.js
 OOG/StarterConfig.js
 /Modules/Mock.js
+
+# party mode - your own copy (template is +setup/PartySettings.js)
+Settings/PartySettings.js

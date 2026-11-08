@@ -36,6 +36,16 @@ const LocationAction = {
   
   const Controls = require("../../modules/Control");
   const Overrides = require("../../modules/Override");
+  const Party = require("../Modules/Party");
+
+  /** party followers never make games, they join the leader's */
+  const openGameWindow = function () {
+    if (Party.isFollower) {
+      Starter.LocationEvents.openJoinGameWindow();
+    } else {
+      Starter.LocationEvents.openCreateGameWindow();
+    }
+  };
   const SoloEvents = (function () {
     let { outOfGameCheck, check, gameInfo } = require("../Core/SoloEvents");
     return {
@@ -1034,7 +1044,7 @@ const LocationAction = {
     if (Starter.inGame || Starter.gameInfo.error) {
       !Starter.gameStart && (Starter.gameStart = DataFile.getStats().ingameTick);
 
-      if (getTickCount() - Starter.gameStart < Starter.Config.MinGameTime * 1e3) {
+      if (getTickCount() - Starter.gameStart < Starter.Config.MinGameTime * 1e3 && !Party.isFollower) {
         ControlAction.timeoutDelay("Min game time wait", Starter.Config.MinGameTime * 1e3 + Starter.gameStart - getTickCount());
       }
     }
@@ -1107,7 +1117,7 @@ const LocationAction = {
       );
     }
 
-    Starter.LocationEvents.openCreateGameWindow();
+    openGameWindow();
   };
 
   const { locations } = require("../../oog/Locations");
@@ -1171,7 +1181,7 @@ const LocationAction = {
     if (Starter.inGame || Starter.gameInfo.error) {
       !Starter.gameStart && (Starter.gameStart = DataFile.getStats().ingameTick);
 
-      if (getTickCount() - Starter.gameStart < Starter.Config.MinGameTime * 1e3 && !joinInfo) {
+      if (getTickCount() - Starter.gameStart < Starter.Config.MinGameTime * 1e3 && !joinInfo && !Party.isFollower) {
         let _waitTime = Starter.Config.MinGameTime * 1e3 + Starter.gameStart - getTickCount();
         ControlAction.timeoutDelay("Min game time wait", _waitTime);
       }
@@ -1201,7 +1211,7 @@ const LocationAction = {
     if (Starter.deadCheck) {
       Controls.LobbyQuit.click();
     } else {
-      Starter.LocationEvents.openCreateGameWindow();
+      openGameWindow();
     }
   });
 
@@ -1210,6 +1220,13 @@ const LocationAction = {
   });
 
   locations.set(sdk.game.locations.CreateGame, function (loc) {
+    if (Party.isFollower) {
+      // followers don't make games - back to the join tab
+      Controls.CancelCreateGame.click();
+      Controls.JoinGameWindow.click();
+      return;
+    }
+
     ControlAction.timeoutDelay("Create Game Delay", Starter.Config.DelayBeforeLogin * 1e3);
     D2Bot.updateStatus("Creating Game");
 
@@ -1231,6 +1248,11 @@ const LocationAction = {
     
     // todo - really don't need use profiles set difficulty for online. Only single player so re-write difficulty stuff
     checkDifficulty();
+
+    // party leader - make the game in the lowest difficulty any online member still needs
+    if (Party.isLeader) {
+      Starter.gameInfo.difficulty = Party.chooseDifficulty(Starter.gameInfo.difficulty);
+    }
 
     Starter.gameInfo.gameName = DataFile.getStats().gameName;
     Starter.gameInfo.gamePass = Starter.randomString(5, true);
@@ -1273,7 +1295,59 @@ const LocationAction = {
   });
 
   locations.set(sdk.game.locations.GameIsFull, function () {
+    if (Party.isFollower) {
+      D2Bot.printToConsole("[Party] Leader's game is full");
+      lastPartyJoin && Party.joinFailed(lastPartyJoin);
+      Starter.lastGameStatus = "ready";
+      Controls.JoinGameWindow.click();
+      return;
+    }
     Starter.LocationEvents.openCreateGameWindow();
+  });
+
+  /** last game a party follower tried to join */
+  let lastPartyJoin = "";
+
+  locations.set(sdk.game.locations.JoinGame, function (loc) {
+    if (!Party.isFollower) {
+      Starter.LocationEvents.openCreateGameWindow();
+      return;
+    }
+
+    let target = Party.getJoinTarget();
+
+    // last click didn't get us in game
+    if (Starter.lastGameStatus === "pending") {
+      Starter.lastGameStatus = "ready";
+      if (lastPartyJoin) {
+        let fails = Party.joinFailed(lastPartyJoin);
+        D2Bot.printToConsole("[Party] Failed to join " + lastPartyJoin + " (" + fails + "/3)", sdk.colors.D2Bot.Gold);
+        ControlAction.timeoutDelay("Party join retry", Time.seconds(5));
+      }
+      target = Party.getJoinTarget();
+    }
+
+    if (!target.game) {
+      D2Bot.updateStatus("Party :: " + target.wait);
+      delay(2000);
+      return;
+    }
+
+    D2Bot.updateStatus("Party :: Joining " + target.game + " (" + target.diff + ")");
+    me.blockMouse = true;
+
+    try {
+      Controls.JoinGameName.setText(target.game);
+      Controls.JoinGamePass.setText(target.pass);
+      delay(250);
+      lastPartyJoin = target.game;
+      Controls.JoinGame.click();
+      Starter.lastGameStatus = "pending";
+    } finally {
+      me.blockMouse = false;
+    }
+
+    Starter.locationTimeout(15000, loc);
   });
 
   locations.set(sdk.game.locations.OkCenteredErrorPopUp, function () {

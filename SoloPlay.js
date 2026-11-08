@@ -199,6 +199,10 @@ function main () {
   Cubing.init();
   LocalChat.init();
 
+  // party mode - several soloplay profiles in one game (see SoloPlay/Settings/PartySettings.js)
+  const SoloParty = require("./Modules/Party");
+  SoloParty.initInGame();
+
   // Load event listeners
   addEventListener("scriptmsg", scriptEvent);
   addEventListener("copydata", copyDataEvent);
@@ -208,7 +212,7 @@ function main () {
     || TorchSystem.inGameCheck()
     || Gambling.inGameCheck()
     || CraftingSystem.inGameCheck()
-    || SoloEvents.inGameCheck()) {
+    || (!SoloParty.enabled && SoloEvents.inGameCheck())) {
     return true;
   }
 
@@ -247,7 +251,7 @@ function main () {
   }
 
   if (Config.PublicMode) {
-    Config.PublicMode === true ? require("libs/modules/workers/SimpleParty") : load("threads/Party.js");
+    Config.PublicMode === true ? require("../modules/workers/SimpleParty") : load("threads/Party.js");
   }
 
   // One time maintenance - check cursor, get corpse, clear leftover items, pick items in case anything important was dropped
@@ -377,14 +381,19 @@ function main () {
   if (Check.usePreviousSocketQuest()) return true; // Currently only supports going back to nightmare to socket a lidless if one is equipped.
   
   myPrint("starting run");
-  Loader.run();
-  // we have scripts to retry so lets run them
-  if (SoloIndex.retryList.length) {
-    SoloIndex.scripts = SoloIndex.retryList.slice(0);
+  if (SoloParty.enabled) {
+    // party mode handles the script list (and retries) together with the other members
+    SoloParty.run();
+  } else {
     Loader.run();
+    // we have scripts to retry so lets run them
+    if (SoloIndex.retryList.length) {
+      SoloIndex.scripts = SoloIndex.retryList.slice(0);
+      Loader.run();
+    }
   }
 
-  if (Config.MinGameTime && getTickCount() - startTime < Time.seconds(Config.MinGameTime)) {
+  if (Config.MinGameTime && !SoloParty.isFollower && getTickCount() - startTime < Time.seconds(Config.MinGameTime)) {
     try {
       Town.goToTown();
 

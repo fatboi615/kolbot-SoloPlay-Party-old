@@ -1,3 +1,7 @@
+> ## Party mode (this fork)
+> Several SoloPlay characters in **one game, leveling together** - shared script list, focus fire on the leader's target, leader portals, synced difficulty, followers auto-rejoin.
+> See **[PARTY-MODE.md](PARTY-MODE.md)** for setup. Original SoloPlay by theBGuy: https://github.com/blizzhackers/kolbot-SoloPlay
+
 ![extract into](https://i.imgur.com/TcRmoRm.png)
 
 *"the one bot to rule them all."*

@@ -37,6 +37,9 @@ include("SoloPlay/OOG/OOGOverrides.js");
 // is this needed? soloplay doesn't run in default.dbj anymore
 include("SoloPlay/Core/ConfigOverrides.js");
 
+// party mode - several soloplay profiles in one game (see SoloPlay/Settings/PartySettings.js)
+const SoloParty = require("../Modules/Party");
+
 if (typeof Starter.AdvancedConfig[me.profile] === "object") {
   Object.assign(Starter.Config, Starter.AdvancedConfig[me.profile]);
 }
@@ -74,6 +77,11 @@ function main () {
   if (Profile().type === sdk.game.profiletype.TcpIpJoin) {
     D2Bot.printToConsole("TcpJoin is unsupported.");
     D2Bot.stop();
+  }
+
+  if (SoloParty.enabled) {
+    SoloParty.validate();
+    SoloParty.oogHeartbeat(true);
   }
 
   Starter.gameCount = (DataFile.getStats().runs + 1 || 1);
@@ -129,6 +137,7 @@ function main () {
         }
       }
 
+      SoloParty.oogHeartbeat();
       delay(1000);
     }
 
@@ -137,6 +146,7 @@ function main () {
     Starter.isUp = "no";
 
     LocationAction.run();
+    SoloParty.oogHeartbeat();
     delay(1000);
   }
 }
