@@ -53,7 +53,8 @@
     TaxiWait: 90,
     HostRotation: true,
     HoldAtPortal: true,
-    GatherWait: 20,
+    GatherWait: 30,
+    BossWait: 45,
     BattleOrders: true,
     Debug: false,
   };
@@ -611,23 +612,29 @@
   let _gatherCount = 0;
   /** when we last came out of town - a portal made before this is gone if we came back through it */
   let _leftTownAt = 0;
+  let _inTownSeen = false;
+  let _enteredTownAt = 0;
+  /** who we're helping right now - published so the runner knows who to wait for */
+  let _helping = { profile: "", tick: 0 };
+  /** inside assistTick (can be a long walk) - our "helping" stays fresh the whole time */
+  let _inAssist = 0;
 
   /** published in our game file every heartbeat */
   const trackTownTrip = function () {
     try {
       if (!me.inTown) {
-        // just came back out of town while running our own script - regroup the party here
-        if (_townTrip && Date.now() - _leftTownAt > 3000) {
-          // heartbeat is up to a second late, so back-date it a little
-          _leftTownAt = Date.now() - 1000;
-        }
-        if (_townTrip && isLeader && _leaderBusy && settings.GatherWait > 0) {
-          _gatherCount += 1;
-          _gather = { id: _gatherCount, area: me.area, until: Date.now() + Time.seconds(settings.GatherWait) };
+        if (_inTownSeen) {
+          _inTownSeen = false;
+          // left town some way our hooks didn't see - heartbeat is up to a second late, so back-date it
+          _leftTownAt < _enteredTownAt && (_leftTownAt = Date.now() - 1000);
         }
         _townTrip = null;
         _lastField = { area: me.area, x: me.x, y: me.y, tick: Date.now() };
         return null;
+      }
+      if (!_inTownSeen) {
+        _inTownSeen = true;
+        _enteredTownAt = Date.now();
       }
       if (!_townTrip && _lastField && Date.now() - _lastField.tick < 4000) {
         _townTrip = { area: _lastField.area, x: _lastField.x, y: _lastField.y, tick: Date.now() };
@@ -693,6 +700,10 @@
         progress: myProgress(),
         townTrip: trackTownTrip(),
         gather: _gather ? { id: _gather.id, area: _gather.area } : null,
+        helping: _helping.profile && (_inAssist || Date.now() - _helping.tick < 15000) ? _helping.profile : "",
+        helpTick: _inAssist ? Date.now() : _helping.tick,
+        // our meeting point: where our (one) town portal is standing
+        rally: (_myPortal && _myPortal.tick > _leftTownAt) ? { area: _myPortal.area, owner: me.name, tick: _myPortal.tick } : null,
         hasBO: hasBO(),
         bo: haveBOState(),
       };
@@ -836,7 +847,9 @@
     Party.blockQuestPickup = false;
     Party.state.running = script;
     Party.writeGame();
-    isLeader && (_leaderBusy = true);
+    // anyone running their own script is the runner: puts portals down and waits for whoever helps them
+    _leaderBusy = true;
+    _regroupedAt = {};
 
     try {
       result = Loader.runIndexedScript(script, SoloIndex.scripts.indexOf(script));
@@ -1214,9 +1227,10 @@
   /**
    * @param {number} area
    * @param {string} name - char name of who we are following (to use their portal)
+   * @param {{ area: number, owner: string, tick: number } | null} [rally] - their meeting point (where their portal is)
    * @returns {boolean}
    */
-  const travelTo = function (area, name) {
+  const travelTo = function (area, name, rally) {
     let fail = travelFails[area];
     if (fail && fail.fails >= 3 && getTickCount() - fail.tick < Time.seconds(30)) {
       // stop hammering a route that keeps failing, wait in town for a bit
@@ -1292,6 +1306,17 @@
           ok = Pather.usePortal(area, owner);
           ok && console.log("ÿc8[Party]ÿc0 took " + owner + "'s portal to " + getAreaName(area));
         }
+        // no portal to where they are now, but their portal (meeting point) is a few areas back -
+        // take it and walk the rest of the way instead of walking from town
+        if (!ok && !owner && rally && rally.owner && rally.area !== area && sdk.areas.actOf(rally.area) === areaAct
+          && Date.now() - rally.tick < Time.minutes(15)) {
+          Town.move("portalspot");
+          if (Misc.poll(function () {
+            return Pather.getPortal(rally.area, rally.owner);
+          }, 3000, 250) && Pather.usePortal(rally.area, rally.owner)) {
+            console.log("ÿc8[Party]ÿc0 took " + rally.owner + "'s portal to " + getAreaName(rally.area) + ", walking to " + getAreaName(area));
+          }
+        }
       }
 
       if (!ok && !me.inArea(area)) {
@@ -1361,6 +1386,8 @@
    */
   Party.assistTick = function (profile) {
     Party.blockQuestPickup = true;
+    _helping = { profile: profile, tick: Date.now() };
+    _inAssist += 1;
 
     try {
       const info = Party.readGameFile(profile);
@@ -1384,11 +1411,21 @@
 
       const act = sdk.areas.actOf(area);
 
-      // they are in town - meet them there
+      const theirs = info && sameGame(info.game) ? info : null;
+      const rally = theirs ? theirs.rally : null;
+
+      // they are in town
       if (sdk.areas.Towns.includes(area)) {
-        // they popped to town from where we are - hold at their portal until they come back
-        let trip = info && sameGame(info.game) ? info.townTrip : null;
-        if (settings.HoldAtPortal && trip && !me.inTown && me.inArea(trip.area) && Date.now() - trip.tick < Time.minutes(3)) {
+        // popped to town in the middle of their script - the meeting point is their portal in the field,
+        // not town: wait there (they come back through it) instead of following them in and walking back
+        let trip = theirs ? theirs.townTrip : null;
+        let midScript = !!trip && !!theirs.running && Date.now() - trip.tick < Time.minutes(3);
+        if (settings.HoldAtPortal && midScript && !me.inArea(trip.area) && me.accessToAct(sdk.areas.actOf(trip.area))) {
+          me.overhead("Party: going to wait at " + name + "'s portal (" + getAreaName(trip.area) + ")");
+          travelTo(trip.area, name, rally);
+          return true;
+        }
+        if (settings.HoldAtPortal && midScript && !me.inTown && me.inArea(trip.area)) {
           if (getDistance(me.x, me.y, trip.x, trip.y) > 6) {
             try {
               Pather.moveNear(trip.x, trip.y, 4);
@@ -1413,6 +1450,8 @@
       if (!me.inArea(area)) {
         if (!me.accessToAct(act)) {
           me.overhead("Party: can't reach " + name + " in " + getAreaName(area));
+          // don't make them wait for us
+          _helping = { profile: "", tick: 0 };
           !me.inTown && Town.goToTown();
           delay(2000);
           return false;
@@ -1420,7 +1459,7 @@
 
         me.inTown && townChores();
         me.overhead("Party: going to " + name + " (" + getAreaName(area) + ")");
-        return travelTo(area, name);
+        return travelTo(area, name, rally);
       }
 
       // same area - stay close and fight what they are fighting
@@ -1470,6 +1509,8 @@
       return false;
     } finally {
       Party.blockQuestPickup = false;
+      _inAssist = Math.max(0, _inAssist - 1);
+      _helping.profile && (_helping.tick = Date.now());
     }
   };
 
@@ -1944,141 +1985,97 @@
     }
   };
 
-  /**
-   * Leader: hold still for a moment if a follower is falling behind. Never while monsters are close.
-   * Runs from the background worker inside delay(), so the leader's script is simply paused.
-   */
-  /** leader: after coming out of town, wait for everyone to gather and get Battle Orders */
-  const gatherCheck = function () {
-    if (!_gather || !_leaderBusy) return false;
-    if (me.inTown || me.dead || Date.now() > _gather.until || !me.inArea(_gather.area)) {
-      _gather = null;
-      return false;
-    }
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+  // Runner - whoever is running their own script while party members help them
+  // (usually the leader). The runner keeps ONE meeting point (its portal) and only waits
+  // for its helpers at planned moments - never in the middle of something else.
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
-    const active = Party.activeFollowers();
-    if (!active.length) {
-      _gather = null;
-      return false;
-    }
+  /** true while a regroup / pace wait is running (no nesting) */
+  let _waiting = false;
+  /** area -> tick we last regrouped there this script */
+  let _regroupedAt = {};
+  let _lastArrive = { area: 0, tick: 0 };
 
-    // our portal closed when we came back through it - open a new one for anyone not here yet
-    if (!_gather.portal) {
-      _gather.portal = true;
-      let away = active.filter(function (f) {
-        let info = Party.readGame(f);
-        return !!info && !info.dead && info.area !== me.area;
-      });
-      if (away.length && !myPortalHere() && !monstersNear(15) && tpCharges() > TP_RESERVE) {
-        try {
-          if (Pather.makePortal(false)) {
-            // give them time to walk to the portal spot and come through
-            _gather.until = Math.max(_gather.until, Date.now() + Time.seconds(30));
-            log("Portal back up in " + getAreaName(me.area) + " for " + away.join(", "));
-          }
-        } catch (e) {
-          console.warn("Party :: couldn't re-open portal - " + (e.message || e));
-        }
-      }
+  let _bossAreas = null;
+  /** quest/boss areas - the runner waits longer there so nobody misses the fight */
+  const bossAreas = function () {
+    if (!_bossAreas) {
+      const a = sdk.areas;
+      _bossAreas = [
+        a.DenofEvil, a.BurialGrounds, a.TowerCellarLvl5, a.CatacombsLvl4, a.Tristram, a.DurielsLair,
+        a.ArcaneSanctuary, a.CanyonofMagic, a.Travincal, a.DuranceofHateLvl3, a.ChaosSanctuary,
+        a.ArreatSummit, a.WorldstoneLvl3, a.ThroneofDestruction,
+      ].filter(Boolean);
     }
-    const boInParty = settings.BattleOrders && (hasBO() || active.some(function (f) {
-      let info = Party.readGame(f);
-      return !!info && info.hasBO;
-    }));
+    return _bossAreas;
+  };
 
-    const notReady = function () {
-      return active.filter(function (f) {
-        let info = Party.readGame(f);
-        if (!info || info.dead || !Party.inGame(f)) return false;
-        if (info.area !== me.area || getDistance(me.x, me.y, info.x, info.y) > 12) return true;
-        return boInParty && !info.bo;
-      });
-    };
-
-    let waiting = notReady();
-    if (!waiting.length && (!boInParty || haveBOState())) {
-      _gather = null;
-      return false;
+  /** is it safe to stand still and wait right now (not in the middle of a portal, town trip or TownChicken) */
+  const safeToWait = function () {
+    if (_waiting || _busyDepth > 0 || me.inTown || me.dead) return false;
+    try {
+      if (typeof SoloEvents !== "undefined" && SoloEvents.townChicken && SoloEvents.townChicken.running) return false;
+    } catch (e) {
+      // ignore
     }
-
-    let castBO = false;
-    me.overhead("Party: regrouping" + (boInParty ? " for Battle Orders" : ""));
-    while (Date.now() < _gather.until) {
-      if (me.dead || monstersNear(15)) break;
-      global._delay ? global._delay(250) : nativeSleep(250);
-      Party.writeGame();
-      waiting = notReady();
-      // everyone's here - if we're the one with BO, cast it now
-      let here = waiting.filter(function (f) {
-        let info = Party.readGame(f);
-        return !!info && (info.area !== me.area || getDistance(me.x, me.y, info.x, info.y) > 12);
-      });
-      if (!here.length && hasBO() && !castBO) {
-        castBO = true;
-        try {
-          Precast.doPrecast(true);
-        } catch (e) {
-          // ignore
-        }
-      }
-      if (!waiting.length && (!boInParty || haveBOState())) break;
-    }
-    _gather = null;
     return true;
   };
 
-  const paceCheck = function () {
-    if (!settings.LeaderWaits || !_leaderBusy) return;
-    if (Date.now() - _lastPaceCheck < 1500 || Date.now() < _paceCooldownUntil) return;
-    _lastPaceCheck = Date.now();
-    if (me.inTown || me.dead || !me.idle) return;
-
-    const lagging = function () {
-      return followers.filter(function (f) {
-        let info = Party.readGame(f);
-        if (!info || !info.ready || info.dead || !Party.inGame(f)) return false;
-        // in town: only wait if it's on its way to us (following us through a script), not shopping
-        if (info.inTown) return String(info.running || "").indexOf("with leader") > -1;
-        // busy with its own script somewhere else - not trying to keep up with us
-        if (info.running && String(info.running).indexOf("with leader") === -1) return false;
-        // following us into this area - wait if they're far back
-        if (info.area === me.area) return getDistance(me.x, me.y, info.x, info.y) > settings.WaitDistance;
-        // on their way to us from another (non town) area
-        return true;
-      });
-    };
-
-    let behind = lagging();
-    if (!behind.length || monstersNear(20)) return;
-
-    const start = Date.now();
-    me.overhead("Party: waiting for " + behind.join(", "));
-    while (Date.now() - start < Time.seconds(settings.MaxWaitSeconds)) {
-      global._delay ? global._delay(250) : nativeSleep(250);
-      Party.writeGame();
-      if (me.dead || monstersNear(20)) break;
-      behind = lagging();
-      if (!behind.length) break;
-    }
-    // let the leader move for a bit before checking again
-    _paceCooldownUntil = Date.now() + Time.seconds(4);
+  /**
+   * Party members helping US right now (they publish who they're helping). The leader also counts
+   * followers that are following it through a shared script.
+   * @returns {string[]}
+   */
+  const myHelpers = function () {
+    return members.filter(function (m) {
+      if (m === myProfile || !Party.inGame(m)) return false;
+      let info = Party.readGame(m);
+      if (!info || info.dead || !info.ready) return false;
+      return info.helping === myProfile && Date.now() - (info.helpTick || 0) < 15000;
+    });
   };
 
-  /** Leader: put a town portal down when we arrive somewhere a follower isn't */
+  /** helpers that aren't next to us */
+  const notWithUs = function (helpers, range) {
+    return helpers.filter(function (f) {
+      let info = Party.readGame(f);
+      if (!info || info.dead || !Party.inGame(f)) return false;
+      return info.area !== me.area || getDistance(me.x, me.y, info.x, info.y) > range;
+    });
+  };
+
+  /** we left town through one of our hooks (waypoint / portal / exit) */
+  const noteLeftTown = function () {
+    _inTownSeen = false;
+    _leftTownAt = Date.now() - 300;
+  };
+
+  /**
+   * Put a town portal down here for helpers that aren't here.
+   * @param {boolean} [viaExit] - we walked in through an exit (not a waypoint / portal)
+   */
   const leaderPortal = function (viaExit) {
-    if (!settings.LeaderPortals || !isLeader || me.inTown || me.dead) return;
+    if (!settings.LeaderPortals || !_leaderBusy || me.inTown || me.dead) return;
     // already put one down here since we last left town (going back through our own portal closes it)
     if (myPortalHere()) return;
-    // walking area to area (Durance 3 -> 2 -> 3, Catacombs 2 -> 3 -> 4): only one portal can exist, a new one
-    // would close the one followers are heading for - keep it a while, they follow us from there
-    if (viaExit && _myPortal && _myPortal.tick > _leftTownAt && Date.now() - _myPortal.tick < Time.seconds(45)) return;
     // don't spend the scrolls we need to get back to town ourselves
     if (tpCharges() <= TP_RESERVE) return;
 
-    let needs = Party.activeFollowers().filter(function (f) {
+    let needs = myHelpers().filter(function (f) {
       let info = Party.readGame(f);
       return !!info && info.area !== me.area;
     });
+    // walking area to area (Durance 3 -> 2 -> 3, Catacombs 2 -> 3 -> 4): only one portal can exist and a new one
+    // closes the one helpers are heading for. Helpers out in the field are already on their way - only someone
+    // still in town needs a portal, and then only once our last one is a while old.
+    if (viaExit && _myPortal && _myPortal.tick > _leftTownAt) {
+      if (Date.now() - _myPortal.tick < Time.seconds(45)) return;
+      needs = needs.filter(function (f) {
+        let info = Party.readGame(f);
+        return !!info && info.inTown;
+      });
+    }
     if (!needs.length) return;
 
     try {
@@ -2088,6 +2085,130 @@
     } catch (e) {
       console.warn("Party :: couldn't make portal - " + (e.message || e));
     }
+  };
+
+  /**
+   * Wait (up to `seconds`) for every helper to be next to us, fighting anything that comes close.
+   * Whoever has Battle Orders casts it once everyone is together.
+   * @param {number} seconds
+   */
+  const regroup = function (seconds) {
+    if (!seconds || !safeToWait()) return false;
+    let helpers = myHelpers();
+    if (!helpers.length) return false;
+
+    const boInParty = settings.BattleOrders && (hasBO() || helpers.some(function (f) {
+      let info = Party.readGame(f);
+      return !!info && info.hasBO;
+    }));
+    const notReady = function () {
+      let away = notWithUs(helpers, 12);
+      if (away.length || !boInParty) return away;
+      return helpers.filter(function (f) {
+        let info = Party.readGame(f);
+        return !!info && !info.dead && !info.bo;
+      }).concat(haveBOState() ? [] : [myProfile]);
+    };
+
+    if (!notReady().length) return false;
+
+    _waiting = true;
+    _gatherCount += 1;
+    _gather = { id: _gatherCount, area: me.area, until: Date.now() + Time.seconds(seconds) };
+    Party.writeGame();
+    let castBO = false;
+    try {
+      while (Date.now() < _gather.until) {
+        if (me.dead || me.inTown) break;
+        if (monstersNear(15)) {
+          try {
+            Attack.clear(15);
+          } catch (e) {
+            // ignore
+          }
+        }
+        let waiting = notReady();
+        if (!waiting.length) break;
+        // everyone's here - if we have BO, cast it now (helpers with BO do the same on their side)
+        if (!castBO && hasBO() && !notWithUs(helpers, 12).length) {
+          castBO = true;
+          try {
+            Precast.doPrecast(true);
+          } catch (e) {
+            // ignore
+          }
+        }
+        me.overhead("Party: waiting for " + waiting.filter(function (w) {
+          return w !== myProfile;
+        }).join(", ") + (boInParty ? " (Battle Orders)" : ""));
+        delay(250);
+        Party.writeGame();
+      }
+    } finally {
+      _gather = null;
+      _waiting = false;
+    }
+    return true;
+  };
+
+  /**
+   * We just arrived somewhere new while running our own script. The only places the runner waits.
+   * @param {"wp"|"portal"|"return"|"exit"} kind
+   */
+  const arrive = function (kind) {
+    if (!_leaderBusy || !safeToWait()) return;
+    // the same arrival can come through two hooks (waypoint hook -> portal hook)
+    if (_lastArrive.area === me.area && Date.now() - _lastArrive.tick < 5000) return;
+    _lastArrive = { area: me.area, tick: Date.now() };
+
+    let helpers = myHelpers();
+    if (!helpers.length) return;
+
+    // 1. meeting point: one portal right here for anyone who isn't
+    leaderPortal(kind === "exit");
+
+    // 2. planned wait
+    const boss = bossAreas().includes(me.area);
+    if (kind === "exit" && !boss) return; // walking through - pace checks keep them close
+    if (kind !== "return" && _regroupedAt[me.area] && Date.now() - _regroupedAt[me.area] < Time.seconds(60)) return;
+    _regroupedAt[me.area] = Date.now();
+    regroup(boss ? Math.max(settings.GatherWait, settings.BossWait) : settings.GatherWait);
+  };
+
+  /**
+   * Short hold when a helper falls behind. Runs right after we finish a move (never in the middle of one).
+   */
+  const paceCheck = function () {
+    if (!settings.LeaderWaits || !_leaderBusy || !safeToWait()) return;
+    if (Date.now() - _lastPaceCheck < 1500 || Date.now() < _paceCooldownUntil) return;
+    _lastPaceCheck = Date.now();
+    if (!me.idle) return;
+
+    const helpers = myHelpers();
+    if (!helpers.length) return;
+    const lagging = function () {
+      return notWithUs(helpers, settings.WaitDistance);
+    };
+
+    let behind = lagging();
+    if (!behind.length || monstersNear(20)) return;
+
+    _waiting = true;
+    try {
+      const start = Date.now();
+      me.overhead("Party: waiting for " + behind.join(", "));
+      while (Date.now() - start < Time.seconds(settings.MaxWaitSeconds)) {
+        delay(250);
+        Party.writeGame();
+        if (me.dead || me.inTown || monstersNear(20)) break;
+        behind = lagging();
+        if (!behind.length) break;
+      }
+    } finally {
+      _waiting = false;
+    }
+    // let the runner move for a bit before checking again
+    _paceCooldownUntil = Date.now() + Time.seconds(4);
   };
 
   /** Call once from SoloPlay.js after Config/Pickit init. */
@@ -2205,17 +2326,16 @@
           Party.writeGame();
         }
         isFollower && leaderWatchdog();
-        // never hold the leader still in the middle of making/taking a portal - the portal wait runs out and
-        // kolbot quits the game ("Town.goToTown: Failed to go to town")
-        isLeader && !_busyDepth && (gatherCheck() || paceCheck());
+        // no waiting from in here any more - the heartbeat runs inside delay(), which can be the middle of making
+        // or taking a portal. The runner only waits at planned moments (see arrive / paceCheck hooks).
       } catch (e) {
         // never let the heartbeat kill the main thread
       }
       return true;
     };
 
-    // leader: heading back to the area we just popped to town from - use our own portal (followers are waiting at it)
-    if (isLeader && settings.HoldAtPortal) {
+    // runner: heading back to the area we just popped to town from - use our own portal (helpers are waiting at it)
+    if (settings.HoldAtPortal) {
       const waypointBeforeReturn = Pather.useWaypoint;
       Pather.useWaypoint = function (targetArea) {
         try {
@@ -2251,32 +2371,63 @@
       };
     }
 
-    // leader: drop a portal after arriving somewhere new so followers without the waypoint can come
-    if (isLeader && settings.LeaderPortals) {
-      const originalUseWaypoint = Pather.useWaypoint;
-      Pather.useWaypoint = function () {
-        let wasInTown = me.inTown;
-        let result = originalUseWaypoint.apply(this, arguments);
-        try {
-          wasInTown && !me.inTown && (_leftTownAt = Date.now() - 500);
-          _leaderBusy && !me.inTown && leaderPortal();
-        } catch (e) {
-          // ignore
+    // runner: arriving somewhere new is when we put the meeting point (portal) down and wait for our helpers
+    const waypointBeforeArrive = Pather.useWaypoint;
+    Pather.useWaypoint = function () {
+      let wasInTown = me.inTown;
+      let trip = _townTrip;
+      let result = waypointBeforeArrive.apply(this, arguments);
+      try {
+        if (!me.inTown && me.area) {
+          wasInTown && noteLeftTown();
+          arrive(wasInTown && trip && trip.area === me.area ? "return" : "wp");
         }
-        return result;
-      };
-      const originalMoveToExit = Pather.moveToExit;
-      Pather.moveToExit = function (targetArea, use) {
-        let before = me.area;
-        let result = originalMoveToExit.apply(this, arguments);
-        try {
-          use && _leaderBusy && me.area !== before && !me.inTown && leaderPortal(true);
-        } catch (e) {
-          // ignore
+      } catch (e) {
+        console.warn("Party :: arrive (waypoint) - " + (e.message || e));
+      }
+      return result;
+    };
+    const portalBeforeArrive = Pather.usePortal;
+    Pather.usePortal = function () {
+      let wasInTown = me.inTown;
+      let trip = _townTrip;
+      let result = portalBeforeArrive.apply(this, arguments);
+      try {
+        if (wasInTown && !me.inTown) {
+          noteLeftTown();
+          arrive(trip && trip.area === me.area ? "return" : "portal");
         }
-        return result;
-      };
-    }
+      } catch (e) {
+        console.warn("Party :: arrive (portal) - " + (e.message || e));
+      }
+      return result;
+    };
+    const exitBeforeArrive = Pather.moveToExit;
+    Pather.moveToExit = function (targetArea, use) {
+      let before = me.area;
+      let wasInTown = me.inTown;
+      let result = exitBeforeArrive.apply(this, arguments);
+      try {
+        if (use && me.area !== before && !me.inTown) {
+          wasInTown && noteLeftTown();
+          arrive("exit");
+        }
+      } catch (e) {
+        console.warn("Party :: arrive (exit) - " + (e.message || e));
+      }
+      return result;
+    };
+    // runner: short catch-up pauses happen right after a move finishes, never in the middle of something
+    const moveBeforePace = Pather.move;
+    Pather.move = function () {
+      let result = moveBeforePace.apply(this, arguments);
+      try {
+        _leaderBusy && paceCheck();
+      } catch (e) {
+        // ignore
+      }
+      return result;
+    };
 
     Party.state.ready = false;
     Party.state.finishedGame = "";

@@ -152,10 +152,16 @@
     HoldAtPortal: true,
 
     /**
-     * @desc - seconds the leader waits after coming out of town for everyone to gather (and get Battle Orders)
-     *   before carrying on. Never waits with monsters close. 0 = don't regroup.
+     * @desc - seconds the runner (whoever is running the script - usually the leader) waits for its helpers when it
+     *   arrives by waypoint/portal or comes back from town, and for Battle Orders. Fights anything that comes close
+     *   while it waits. 0 = don't regroup.
      */
-    GatherWait: 20,
+    GatherWait: 30,
+
+    /**
+     * @desc - seconds the runner waits when it walks into a boss / quest area (Den, Catacombs 4, Durance 3, Chaos...)
+     */
+    BossWait: 45,
 
     /**
      * @desc - if anyone in the party has Battle Orders (barb), they cast it when the party regroups and the
