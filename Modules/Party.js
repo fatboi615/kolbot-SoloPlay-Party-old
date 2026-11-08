@@ -47,6 +47,8 @@
     WaitDistance: 25,
     MaxWaitSeconds: 8,
     MaxGameMinutes: 150,
+    CatchUpAfterFails: 2,
+    MaxCatchUpGames: 6,
     Debug: false,
   };
 
@@ -189,13 +191,10 @@
 
   const Party = {
     settings: settings,
-    enabled: enabled,
     leader: leader,
     followers: followers,
     members: members,
     isLeader: isLeader,
-    isFollower: isFollower,
-    role: role,
     myProfile: myProfile,
     normDiff: normDiff,
     rank: rank,
@@ -203,6 +202,62 @@
     /** set while assisting so we don't steal someone else's quest item */
     blockQuestPickup: false,
   };
+
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+  // Catch-up mode - a follower that keeps failing a quest in the party's games
+  // (e.g. Khalim's Will: the orb is already broken in a game made by someone who finished it)
+  // plays its own solo games until that quest is done, then rejoins the party.
+  // State lives in <profile>.stuck.json, written only by the in-game main thread.
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+
+  /** @returns {{ scripts: Record<string, number>, catchUpGames: number }} */
+  Party.readStuck = function () {
+    let data = readJSON(filePath(myProfile, "stuck"));
+    return {
+      scripts: (data && data.scripts) || {},
+      catchUpGames: (data && data.catchUpGames) || 0,
+    };
+  };
+
+  /** @param {{ scripts: Record<string, number>, catchUpGames: number }} data */
+  const writeStuck = function (data) {
+    data.tick = Date.now();
+    readCache[filePath(myProfile, "stuck")] = data;
+    return writeJSON(filePath(myProfile, "stuck"), data);
+  };
+
+  /** scripts we've failed often enough in party games to go do them solo */
+  Party.stuckScripts = function () {
+    let data = Party.readStuck();
+    return Object.keys(data.scripts).filter(function (s) {
+      return data.scripts[s] >= settings.CatchUpAfterFails;
+    });
+  };
+
+  let _catchUpCache = { tick: 0, value: false };
+  /** follower currently playing solo to catch up on quests */
+  Party.inCatchUp = function () {
+    if (!enabled || isLeader) return false;
+    if (Date.now() - _catchUpCache.tick < 3000) return _catchUpCache.value;
+    _catchUpCache = { tick: Date.now(), value: Party.stuckScripts().length > 0 };
+    return _catchUpCache.value;
+  };
+
+  Object.defineProperty(Party, "enabled", {
+    get: function () {
+      return enabled && !Party.inCatchUp();
+    },
+  });
+  Object.defineProperty(Party, "isFollower", {
+    get: function () {
+      return enabled && !isLeader && !Party.inCatchUp();
+    },
+  });
+  Object.defineProperty(Party, "role", {
+    get: function () {
+      return Party.inCatchUp() ? "catchup" : role;
+    },
+  });
 
   Party.readOog = function (profile) {
     return readJSON(filePath(profile, "oog"));
@@ -282,7 +337,8 @@
 
     writeJSON(filePath(myProfile, "oog"), Object.assign({}, _oogExtra, {
       profile: myProfile,
-      role: role,
+      role: Party.role,
+      catchUp: Party.inCatchUp() ? Party.stuckScripts() : [],
       status: inGame ? "ingame" : "oog",
       tick: Date.now(),
       game: game,
@@ -638,6 +694,68 @@
     }
   };
 
+  /** quest scripts whose failure is worth catching up on (not farming/leveling runs that always "need" to run) */
+  const questScripts = [
+    "den", "bloodraven", "tristram", "countess", "smith", "andariel", "cube", "radament", "amulet", "staff",
+    "summoner", "tombs", "duriel", "lamessen", "eye", "heart", "brain", "travincal", "mephisto", "izual",
+    "hellforge", "diablo", "shenk", "savebarby", "anya", "ancients", "baal",
+  ];
+
+  /**
+   * Follower: after we ran a quest script ourselves in a party game, remember if it still isn't done.
+   * Enough failures in a row puts us in catch-up mode (solo games) from the next game on.
+   * @param {string} script
+   */
+  const noteAttempt = function (script) {
+    if (!isFollower || !questScripts.includes(script)) return;
+    let data = Party.readStuck();
+    if (stillNeeds(script)) {
+      data.scripts[script] = (data.scripts[script] || 0) + 1;
+      log(me.name + " failed " + script + " in a party game (" + data.scripts[script] + "/" + settings.CatchUpAfterFails + ")", true);
+      if (data.scripts[script] >= settings.CatchUpAfterFails) {
+        log(me.name + " will play solo games to catch up on " + script + ", then rejoin the party", true);
+      }
+    } else if (data.scripts[script]) {
+      delete data.scripts[script];
+    } else {
+      return;
+    }
+    writeStuck(data);
+  };
+
+  /**
+   * Call at the end of a solo catch-up game (SoloPlay.js). Clears quests that are done now and
+   * sends us back to the party when nothing is left (or we've tried too many games).
+   */
+  Party.afterCatchUpGame = function () {
+    if (!enabled || isLeader) return;
+    let data = Party.readStuck();
+    let before = Object.keys(data.scripts);
+    if (!before.length) return;
+
+    data.catchUpGames += 1;
+    before.forEach(function (script) {
+      if (!stillNeeds(script)) {
+        delete data.scripts[script];
+        log(me.name + " caught up on " + script, true);
+      }
+    });
+
+    let left = Object.keys(data.scripts).filter(function (s) {
+      return data.scripts[s] >= settings.CatchUpAfterFails;
+    });
+    if (!left.length) {
+      log(me.name + " is caught up - rejoining the party next game", true);
+      data = { scripts: {}, catchUpGames: 0 };
+    } else if (data.catchUpGames >= settings.MaxCatchUpGames) {
+      log(me.name + " still stuck on " + left.join(", ") + " after " + data.catchUpGames + " solo games - rejoining the party anyway", true);
+      data = { scripts: {}, catchUpGames: 0 };
+    } else {
+      log(me.name + " still catching up on " + left.join(", ") + " (solo game " + data.catchUpGames + "/" + settings.MaxCatchUpGames + ")", true);
+    }
+    writeStuck(data);
+  };
+
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
   // Assist - follow a party member and fight with them
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -974,7 +1092,13 @@
     // who is online and should show up
     const expected = followers.filter(function (f) {
       let info = Party.readOog(f);
-      return fresh(info, Math.min(settings.StaleAfter, 120));
+      return fresh(info, Math.min(settings.StaleAfter, 120)) && info.role !== "catchup";
+    });
+    followers.forEach(function (f) {
+      let info = Party.readOog(f);
+      if (info && info.role === "catchup") {
+        log(f + " is playing solo to catch up on: " + (info.catchUp || []).join(", "), true);
+      }
     });
 
     Party.state.phase = "wait";
@@ -1242,12 +1366,14 @@
               log(me.name + " still needs " + ls.script + " after following, running it now");
               me.overhead("Party: catching up on " + ls.script);
               runMine(ls.script);
+              noteAttempt(ls.script);
             } else {
               doneThisPass.add(ls.script);
             }
           } else {
             me.overhead("Party: running " + ls.script);
             runMine(ls.script);
+            noteAttempt(ls.script);
           }
         }
 
@@ -1393,7 +1519,7 @@
 
   /** Call once from SoloPlay.js after Config/Pickit init. */
   Party.initInGame = function () {
-    if (!enabled || _initialized) return false;
+    if (!Party.enabled || _initialized) return false;
     _initialized = true;
 
     // invite / accept everyone (games are passworded so it's just us)
@@ -1472,7 +1598,7 @@
 
   /** Replaces Loader.run() in party mode */
   Party.run = function () {
-    if (!enabled) return Loader.run();
+    if (!Party.enabled) return Loader.run();
 
     // same difficulty bookkeeping Loader.run does
     let updatedDifficulty = Check.nextDifficulty();

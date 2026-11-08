@@ -37,7 +37,7 @@
      */
     Groups: {
       // tip: make the tankiest character the leader - it walks into every fight first
-      // "SCL-PAL": ["SCL-SORC", "SCL-NEC"],
+      // "SCL-PAL": ["SCL-SORC", "SCL-BARB"],
     },
 
     /**
@@ -111,6 +111,19 @@
      * @desc - longest the leader holds still at a time (seconds) before moving on again
      */
     MaxWaitSeconds: 8,
+
+    /**
+     * @desc - a follower that fails the same quest this many party games in a row switches to catch-up mode:
+     *   it makes its own games and plays normal SoloPlay until that quest is done, then rejoins the party.
+     *   Some quests can't be done in a game made by someone who already finished them
+     *   (e.g. Khalim's Will - the Compelling Orb is already broken), so the follower has to do them solo.
+     */
+    CatchUpAfterFails: 2,
+
+    /**
+     * @desc - most solo catch-up games before a follower gives up and rejoins the party anyway
+     */
+    MaxCatchUpGames: 6,
 
     /**
      * @desc - hard cap on game length in party mode (minutes). The party ends the game after this.

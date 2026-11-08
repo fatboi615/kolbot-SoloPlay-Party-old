@@ -391,6 +391,8 @@ function main () {
       SoloIndex.scripts = SoloIndex.retryList.slice(0);
       Loader.run();
     }
+    // party follower playing solo to catch up on quests - see if we can rejoin the party
+    SoloParty.inCatchUp() && SoloParty.afterCatchUpGame();
   }
 
   if (Config.MinGameTime && !SoloParty.isFollower && getTickCount() - startTime < Time.seconds(Config.MinGameTime)) {

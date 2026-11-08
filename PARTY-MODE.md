@@ -18,6 +18,11 @@ While the leader is running a script it:
 
 If the **leader leaves** (chicken, death, crash), followers leave within `LeaderLostTimeout` seconds and wait at the join screen for the leader's next game. If a **follower** chickens, it rejoins the leader's game and picks up where the party is.
 
+### Catch-up mode
+Some quests can't be finished in a game made by someone who already finished them - e.g. **Khalim's Will**: the Compelling Orb is already broken, so a follower that missed the credit can never smash it in the leader's games and never gets to Mephisto / act 4. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.
+
+Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel catch-up).
+
 ## Install
 
 1. Copy this folder over `d2bs/kolbot/libs/SoloPlay/`.
@@ -55,6 +60,8 @@ If the **leader leaves** (chicken, death, crash), followers leave within `Leader
 | `LeaderWaits` | true | Leader pauses when a follower falls behind |
 | `WaitDistance` | 25 | Yards back that counts as "behind" |
 | `MaxWaitSeconds` | 8 | Longest single pause |
+| `CatchUpAfterFails` | 2 | Failed party games on the same quest before a follower goes solo to catch up |
+| `MaxCatchUpGames` | 6 | Most solo catch-up games before rejoining anyway |
 | `MaxGameMinutes` | 150 | Hard cap on a party game |
 | `Debug` | false | Print every party step to the D2BotNG console |
 
@@ -69,6 +76,9 @@ Console (with `Debug: true`):
 [Party] Portal down in Cold Plains for scl-sorc
 [Party] MySorc collected den reward from akara
 [Party] Leader left the game - leaving and waiting for the next one
+[Party] MyBarb failed travincal in a party game (2/2)
+[Party] scl-barb is playing solo to catch up on: travincal
+[Party] MyBarb is caught up - rejoining the party next game
 ```
 Overhead: `Party: waiting for scl-sorc`, `Party: going to <name> (<area>)`, `Party: looking for <name>'s portal`.
 
@@ -76,6 +86,7 @@ Overhead: `Party: waiting for scl-sorc`, `Party: going to <name> (<area>)`, `Par
 
 Live state is in `.soloplay/party/` (delete any time to reset):
 - `<profile>.oog.json` - status, game it's in, difficulty it wants
+- `<profile>.stuck.json` - quests a follower keeps failing in party games (catch-up mode)
 - `<profile>.game.json` - area/position, current target, and the party fields: `step`, `phase`, `script`, `needers` (leader) or `needsStep`, `needs`, `doneStep`, `running` (followers)
 
 ## Files changed vs. stock SoloPlay
