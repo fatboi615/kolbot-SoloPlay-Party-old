@@ -17,7 +17,7 @@ Whoever is running the script - usually the leader, but a follower running its o
 
 - **One meeting point.** D2 only lets you have one town portal, so the runner keeps one: it puts it down when it arrives somewhere by waypoint or portal and a helper isn't there. Walking through exits (Durance 3 -> 2 -> 3, Catacombs 2 -> 3 -> 4) doesn't replace it - helpers come through it and walk the rest of the way. A helper in town with no portal to where the runner is now takes the meeting-point portal and walks from there.
 - **Planned waits only.** The runner waits (up to `GatherWait` seconds, `BossWait` in boss/quest areas like Den, Catacombs 4, Durance 3, Chaos) when it arrives by waypoint or portal, comes back from town, or walks into a boss area - fighting anything that comes close while it waits. Small catch-up pauses (`MaxWaitSeconds`) only happen right after it finishes a move, never while it's making or taking a portal or going to town.
-- **Town trips.** When the runner pops to town in the middle of its script, helpers go to **its portal in the field** and wait there (clearing anything close) - even if they were somewhere else or in town - instead of following it into town and walking back. The runner comes back **through its own portal**, lands next to them, and if anyone is still in town (going back through your own portal closes it) puts a new one down and waits.
+- **Town trips.** When the runner pops to town in the middle of its script, helpers go to **its portal in the field** and wait there (clearing anything close) - even if they were somewhere else or in town - instead of following it into town and walking back - for up to `PortalHoldMinutes` (10), TownChicken trips included. The runner comes back **through its own portal**, lands next to them, and if anyone is still in town (going back through your own portal closes it) puts a new one down and waits.
 - **Battle Orders.** Every regroup, whoever has Battle Orders casts it once everyone is together, and the runner waits until everyone has the buff.
 - Followers in the wrong act's town switch to the act the portal leads to - a portal only shows up in the town of the act it opens into.
 - The runner keeps its last 4 town portals for its own town trips. If anyone does run out, it takes a party member's portal, the waypoint, or walks back to town instead of quitting the game.
@@ -74,6 +74,7 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 | `MaxWaitSeconds` | 8 | Longest catch-up pause (only right after a move) |
 | `HostRotation` | true | Furthest-behind member hosts the games, everyone joins to catch it up |
 | `HoldAtPortal` | true | Followers wait at the leader's portal while it's in town; leader returns through it |
+| `PortalHoldMinutes` | 10 | How long followers keep waiting at that portal (town trips and TownChicken) before going to find the leader |
 | `GatherWait` | 30 | Seconds the runner waits for its helpers (and BO) when it arrives by waypoint/portal or comes back from town (0 = off) |
 | `BossWait` | 45 | Same, when it walks into a boss / quest area |
 | `BattleOrders` | true | Party member with BO buffs everyone at each regroup |

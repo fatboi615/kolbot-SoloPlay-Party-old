@@ -53,6 +53,7 @@
     TaxiWait: 90,
     HostRotation: true,
     HoldAtPortal: true,
+    PortalHoldMinutes: 10,
     GatherWait: 30,
     BossWait: 45,
     BattleOrders: true,
@@ -636,7 +637,7 @@
         _inTownSeen = true;
         _enteredTownAt = Date.now();
       }
-      if (!_townTrip && _lastField && Date.now() - _lastField.tick < 4000) {
+      if (!_townTrip && _lastField && Date.now() - _lastField.tick < 15000) {
         _townTrip = { area: _lastField.area, x: _lastField.x, y: _lastField.y, tick: Date.now() };
       }
       return _townTrip;
@@ -1419,7 +1420,12 @@
         // popped to town in the middle of their script - the meeting point is their portal in the field,
         // not town: wait there (they come back through it) instead of following them in and walking back
         let trip = theirs ? theirs.townTrip : null;
-        let midScript = !!trip && !!theirs.running && Date.now() - trip.tick < Time.minutes(3);
+        // their file can lag behind (TownChicken blocks the heartbeat until it's done) - it still says where
+        // they were in the field, which is where their portal is
+        if (!trip && theirs && !theirs.inTown && theirs.area && !sdk.areas.Towns.includes(theirs.area)) {
+          trip = { area: theirs.area, x: theirs.x, y: theirs.y, tick: theirs.tick || Date.now() };
+        }
+        let midScript = !!trip && !!theirs.running && Date.now() - trip.tick < Time.minutes(settings.PortalHoldMinutes);
         if (settings.HoldAtPortal && midScript && !me.inArea(trip.area) && me.accessToAct(sdk.areas.actOf(trip.area))) {
           me.overhead("Party: going to wait at " + name + "'s portal (" + getAreaName(trip.area) + ")");
           travelTo(trip.area, name, rally);
@@ -2267,6 +2273,16 @@
     });
     busy(Pather, "usePortal");
     busy(Pather, "useWaypoint");
+    const choresBeforeParty = Town.doChores;
+    Town.doChores = function () {
+      try {
+        // in town now - this publishes the town trip (where our portal is) right away
+        Party.writeGame();
+      } catch (e) {
+        // ignore
+      }
+      return choresBeforeParty.apply(this, arguments);
+    };
     busy(Town, "doChores");
 
     // no town portals left: kolbot gives up and quits the game when there are other players around.
@@ -2340,7 +2356,7 @@
       Pather.useWaypoint = function (targetArea) {
         try {
           if (_leaderBusy && me.inTown && _townTrip && targetArea === _townTrip.area
-            && Date.now() - _townTrip.tick < Time.minutes(3)) {
+            && Date.now() - _townTrip.tick < Time.minutes(settings.PortalHoldMinutes)) {
             let back = _townTrip.area;
             Town.move("portalspot");
             let portal = Misc.poll(function () {
@@ -2422,6 +2438,8 @@
     Pather.move = function () {
       let result = moveBeforePace.apply(this, arguments);
       try {
+        // moves keep happening during TownChicken / chores when the background heartbeat is blocked
+        Date.now() - _lastGameWrite > 1000 && Party.writeGame();
         _leaderBusy && paceCheck();
       } catch (e) {
         // ignore

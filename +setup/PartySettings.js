@@ -152,6 +152,12 @@
     HoldAtPortal: true,
 
     /**
+     * @desc - minutes followers keep waiting at the leader's portal while it is in town (town trip / TownChicken)
+     *   before they give up and go find it
+     */
+    PortalHoldMinutes: 10,
+
+    /**
      * @desc - seconds the runner (whoever is running the script - usually the leader) waits for its helpers when it
      *   arrives by waypoint/portal or comes back from town, and for Battle Orders. Fights anything that comes close
      *   while it waits. 0 = don't regroup.
