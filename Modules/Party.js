@@ -638,7 +638,13 @@
         _enteredTownAt = Date.now();
       }
       if (!_townTrip && _lastField && Date.now() - _lastField.tick < 15000) {
-        _townTrip = { area: _lastField.area, x: _lastField.x, y: _lastField.y, tick: Date.now() };
+        let tripName = "";
+        try {
+          tripName = getAreaName(_lastField.area);
+        } catch (e) {
+          tripName = "";
+        }
+        _townTrip = { area: _lastField.area, x: _lastField.x, y: _lastField.y, tick: Date.now(), areaName: tripName };
       }
       return _townTrip;
     } catch (e) {
@@ -679,6 +685,47 @@
   };
   /** @type {{ gid: number, classid: number, x: number, y: number, area: number, tick: number } | null} */
   let _target = null;
+  /** last overhead message (shown on the Party Dashboard) */
+  let _lastSay = null;
+
+  /** extra live info for the Party Dashboard - never allowed to break the party file */
+  const dashInfo = function () {
+    const safe = function (fn, fallback) {
+      try {
+        let v = fn();
+        return v === undefined ? fallback : v;
+      } catch (e) {
+        return fallback;
+      }
+    };
+    return {
+      areaName: safe(function () {
+        return getAreaName(me.area);
+      }, ""),
+      act: safe(function () {
+        return me.act;
+      }, 0),
+      cls: safe(function () {
+        return me.classid;
+      }, -1),
+      hp: safe(function () {
+        return me.hpPercent;
+      }, 0),
+      mp: safe(function () {
+        return me.mpPercent;
+      }, 0),
+      gold: safe(function () {
+        return me.gold;
+      }, 0),
+      xp: safe(function () {
+        return typeof Experience !== "undefined" ? Number(Experience.progress()) || 0 : 0;
+      }, 0),
+      gameSecs: safe(function () {
+        return Math.max(0, Math.round((getTickCount() - me.gamestarttime) / 1000));
+      }, 0),
+      say: _lastSay,
+    };
+  };
 
   Party.writeGame = function () {
     if (!enabled) return false;
@@ -711,6 +758,7 @@
     } catch (e) {
       live = { tick: Date.now() };
     }
+    live = Object.assign(live, dashInfo());
     return writeJSON(filePath(myProfile, "game"), Object.assign({}, Party.state, live));
   };
 
@@ -2241,6 +2289,23 @@
 
     // invite / accept everyone (games are passworded so it's just us)
     Config.PublicMode = true;
+
+    // remember what we last said overhead - the Party Dashboard shows it
+    try {
+      const overheadBeforeParty = me.overhead;
+      if (typeof overheadBeforeParty === "function") {
+        me.overhead = function (msg) {
+          try {
+            _lastSay = { msg: String(msg || "").replace(/ÿc./g, ""), tick: Date.now() };
+          } catch (e) {
+            // ignore
+          }
+          return overheadBeforeParty.apply(me, arguments);
+        };
+      }
+    } catch (e) {
+      // ignore
+    }
 
     // portal / town-trip guards
     const busy = function (obj, key, after) {

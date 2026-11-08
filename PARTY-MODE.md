@@ -35,6 +35,17 @@ With host rotation the furthest-behind member hosts, so this is only needed when
 
 Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel catch-up).
 
+## Bot Viewer (all game windows in one place)
+
+`Tools\BotViewer\Bot Viewer.bat` (the full setup also has a `Bot Viewer.bat` next to D2BotNG.exe) opens one window with a **live picture of every Diablo II window** in a grid - the same live previews Windows shows on Alt+Tab, so it costs almost nothing. Under each picture: the character, level and class, where it is and what it's doing, whether it's with the leader, and life/mana bars (from the party files).
+
+- Click a picture, or press **1-9**, to bring that game to the front.
+- **Tuck game windows behind this one** moves every game window behind the viewer, so they stop covering your screen.
+- **Keep on top** keeps the viewer above other windows.
+- Game windows have to be shown (not hidden in D2BotNG, not minimized) for their picture to update. They can sit behind other windows.
+
+Needs Windows 10/11 and the built-in Windows PowerShell - nothing to install.
+
 ## Install
 
 1. Copy this folder over `d2bs/kolbot/libs/SoloPlay/`.
