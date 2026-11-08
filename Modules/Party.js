@@ -33,7 +33,7 @@
   const defaults = {
     Enabled: false,
     Groups: {},
-    WaitForMembers: 90,
+    WaitForMembers: 120,
     PlanTimeout: 30,
     SyncTimeout: 15,
     LeaderLostTimeout: 10,
@@ -1245,36 +1245,52 @@
         haveWp = false;
       }
 
-      // no waypoint and not next door - go to town and use their portal if they put one down
+      // portals open in the town of the act they lead to - that's the town we need to be in to find one
+      const areaAct = sdk.areas.actOf(area);
+      const canReachAct = me.accessToAct(areaAct);
+
+      // no waypoint and not next door - go to (the right) town and use a party portal if there is one
       if (!me.inTown && !nextDoor && !haveWp) {
         me.overhead("Party: heading to town to take " + name + "'s portal");
-        Town.goToTown();
+        canReachAct ? Town.goToTown(areaAct) : Town.goToTown();
+      }
+      // in the wrong act's town - their portal won't be here
+      if (me.inTown && canReachAct && me.act !== areaAct) {
+        Town.goToTown(areaAct);
       }
 
-      // their portal is the quickest way if we are in town - it drops us right next to them
-      if (me.inTown) {
-        // portals are only visible up close, so go stand by the portal spot and look before using the waypoint
-        if (!Pather.getPortal(area, name)) {
-          me.overhead("Party: looking for " + name + "'s portal");
-          Town.move("portalspot");
-        }
+      // a party portal is the quickest way if we are in town - it drops us right next to them
+      if (me.inTown && me.act === areaAct) {
+        // whose portal we'll take: who we're following, then the taxi, then anyone else in the party
+        let owners = [name];
         let taxi = Party.taxiProfile();
-        let taxiName = taxi ? (taxi === myProfile ? me.name : Party.charNameOf(taxi)) : "";
-        let owner = name;
-        let portal = Misc.poll(function () {
-          if (Pather.getPortal(area, name)) {
-            owner = name;
-            return true;
+        if (taxi) owners.push(taxi === myProfile ? me.name : Party.charNameOf(taxi));
+        members.forEach(function (m) {
+          if (m === myProfile) return;
+          let n = Party.charNameOf(m);
+          n && owners.push(n);
+        });
+        owners = owners.filter(function (n, i) {
+          return !!n && owners.indexOf(n) === i;
+        });
+        const findOwner = function () {
+          for (let n of owners) {
+            if (Pather.getPortal(area, n)) return n;
           }
-          if (taxiName && Pather.getPortal(area, taxiName)) {
-            owner = taxiName;
-            return true;
-          }
-          return false;
-        }, 8000, 250);
-        if (portal) {
+          return "";
+        };
+
+        // portals are only visible up close, so go stand by the portal spot and look before using the waypoint
+        let owner = findOwner();
+        if (!owner) {
+          me.overhead("Party: looking for a portal to " + getAreaName(area));
+          Town.move("portalspot");
+          owner = Misc.poll(findOwner, 8000, 250) || "";
+        }
+        if (owner) {
           Town.move("portalspot");
           ok = Pather.usePortal(area, owner);
+          ok && console.log("ÿc8[Party]ÿc0 took " + owner + "'s portal to " + getAreaName(area));
         }
       }
 
@@ -1857,8 +1873,34 @@
   let _lastWatch = 0;
   let _lastPaceCheck = 0;
   let _paceCooldownUntil = 0;
-  /** @type {Record<number, number>} area -> tick we last put a portal down there */
-  const _portalAreas = {};
+  /**
+   * our town portal - D2 only lets you have ONE, making a new one closes the old one
+   * @type {{ area: number, tick: number } | null}
+   */
+  let _myPortal = null;
+  /** >0 while the main thread is making/taking a portal or going to town - background waits must not run then */
+  let _busyDepth = 0;
+  /** keep this many town portals for our own town trips - party portals don't use the last ones */
+  const TP_RESERVE = 4;
+
+  const tpCharges = function () {
+    try {
+      let count = 0;
+      me.getItemsEx(-1, sdk.items.mode.inStorage).forEach(function (i) {
+        if (!i.isInInventory) return;
+        if (i.classid === sdk.items.TomeofTownPortal) count += i.getStat(sdk.stats.Quantity);
+        if (i.classid === sdk.items.ScrollofTownPortal) count += 1;
+      });
+      return count;
+    } catch (e) {
+      return 99;
+    }
+  };
+
+  /** our portal from this trip out of town is still standing in this area */
+  const myPortalHere = function () {
+    return !!_myPortal && _myPortal.area === me.area && _myPortal.tick > _leftTownAt;
+  };
 
   /** monsters close to us that we'd be ignoring if we stood still */
   const monstersNear = function (range) {
@@ -1927,11 +1969,9 @@
         let info = Party.readGame(f);
         return !!info && !info.dead && info.area !== me.area;
       });
-      let justMadeOne = (_portalAreas[me.area] || 0) > _leftTownAt;
-      if (away.length && !justMadeOne && !monstersNear(15)) {
+      if (away.length && !myPortalHere() && !monstersNear(15) && tpCharges() > TP_RESERVE) {
         try {
           if (Pather.makePortal(false)) {
-            _portalAreas[me.area] = Date.now();
             // give them time to walk to the portal spot and come through
             _gather.until = Math.max(_gather.until, Date.now() + Time.seconds(30));
             log("Portal back up in " + getAreaName(me.area) + " for " + away.join(", "));
@@ -2025,10 +2065,15 @@
   };
 
   /** Leader: put a town portal down when we arrive somewhere a follower isn't */
-  const leaderPortal = function () {
+  const leaderPortal = function (viaExit) {
     if (!settings.LeaderPortals || !isLeader || me.inTown || me.dead) return;
     // already put one down here since we last left town (going back through our own portal closes it)
-    if ((_portalAreas[me.area] || 0) > _leftTownAt) return;
+    if (myPortalHere()) return;
+    // walking area to area (Durance 3 -> 2 -> 3, Catacombs 2 -> 3 -> 4): only one portal can exist, a new one
+    // would close the one followers are heading for - keep it a while, they follow us from there
+    if (viaExit && _myPortal && _myPortal.tick > _leftTownAt && Date.now() - _myPortal.tick < Time.seconds(45)) return;
+    // don't spend the scrolls we need to get back to town ourselves
+    if (tpCharges() <= TP_RESERVE) return;
 
     let needs = Party.activeFollowers().filter(function (f) {
       let info = Party.readGame(f);
@@ -2038,7 +2083,6 @@
 
     try {
       if (Pather.makePortal(false)) {
-        _portalAreas[me.area] = Date.now();
         log("Portal down in " + getAreaName(me.area) + " for " + needs.join(", "));
       }
     } catch (e) {
@@ -2070,6 +2114,64 @@
 
     // invite / accept everyone (games are passworded so it's just us)
     Config.PublicMode = true;
+
+    // portal / town-trip guards
+    const busy = function (obj, key, after) {
+      const original = obj[key];
+      obj[key] = function () {
+        _busyDepth += 1;
+        let result;
+        try {
+          result = original.apply(this, arguments);
+        } finally {
+          _busyDepth = Math.max(0, _busyDepth - 1);
+        }
+        try {
+          after && after(result);
+        } catch (e) {
+          // ignore
+        }
+        return result;
+      };
+    };
+    let _portalFrom = 0;
+    const originalMakePortal = Pather.makePortal;
+    Pather.makePortal = function () {
+      _portalFrom = me.area;
+      return originalMakePortal.apply(this, arguments);
+    };
+    busy(Pather, "makePortal", function (result) {
+      // made one (use=true lands us in town, so remember where it was made)
+      result && _portalFrom && !sdk.areas.Towns.includes(_portalFrom) && (_myPortal = { area: _portalFrom, tick: Date.now() });
+    });
+    busy(Pather, "usePortal");
+    busy(Pather, "useWaypoint");
+    busy(Town, "doChores");
+
+    // no town portals left: kolbot gives up and quits the game when there are other players around.
+    // In party mode try a party member's portal, the waypoint, or walk back instead.
+    const originalGoToTown = Town.goToTown;
+    Town.goToTown = function () {
+      if (!me.inTown && !me.dead && !me.getTpTool()) {
+        try {
+          me.overhead("Party: out of town portals, finding another way to town");
+          console.log("ÿc8[Party]ÿc0 out of town portals in " + getAreaName(me.area) + " - using another way to town");
+          let town = sdk.areas.townOf(me.area);
+          let portal = Pather.getPortal(town);
+          if (portal) {
+            Pather.usePortal(null, null, portal);
+          }
+          if (!me.inTown && Pather.wpAreas.includes(me.area) && me.haveWaypoint(me.area)) {
+            Pather.getWP(me.area) && Pather.useWaypoint(town);
+          }
+          !me.inTown && Pather.journeyTo(town);
+        } catch (e) {
+          console.warn("Party :: town fallback failed - " + (e.message || e));
+        }
+      }
+      return originalGoToTown.apply(this, arguments);
+    };
+    busy(Town, "goToTown");
 
     // never pick up quest items while helping someone else - they're theirs
     const originalCheckItem = Pickit.checkItem;
@@ -2103,7 +2205,9 @@
           Party.writeGame();
         }
         isFollower && leaderWatchdog();
-        isLeader && (gatherCheck() || paceCheck());
+        // never hold the leader still in the middle of making/taking a portal - the portal wait runs out and
+        // kolbot quits the game ("Town.goToTown: Failed to go to town")
+        isLeader && !_busyDepth && (gatherCheck() || paceCheck());
       } catch (e) {
         // never let the heartbeat kill the main thread
       }
@@ -2166,7 +2270,7 @@
         let before = me.area;
         let result = originalMoveToExit.apply(this, arguments);
         try {
-          use && _leaderBusy && me.area !== before && !me.inTown && leaderPortal();
+          use && _leaderBusy && me.area !== before && !me.inTown && leaderPortal(true);
         } catch (e) {
           // ignore
         }

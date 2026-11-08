@@ -21,6 +21,10 @@ If the **leader leaves** (chicken, death, crash), followers leave within `Leader
 ### Town trips, regroup and Battle Orders
 When the leader pops to town in the middle of a quest, followers **hold at its portal** in the field (clearing anything close) instead of following it into town. When the leader heads back to that same area it goes **through its own portal** (not the waypoint), so it lands right where everyone is waiting; anywhere else it drops a fresh portal for them. Going back through your own portal closes it in D2, so if anyone is still in town the leader **opens a new portal** right away and waits for them. Followers in town always look for the leader's (or taxi's) portal at the portal spot before falling back to the waypoint.
 
+Followers in the wrong act's town (e.g. Pandemonium Fortress when the leader's portal goes to Durance) switch to the act the portal leads to - a portal only shows up in the town of the act it opens into.
+
+D2 only lets you have **one** town portal, so the leader doesn't drop a new one every time it walks through an exit (Durance 3 -> 2 -> 3) - that would close the portal followers are heading for. It also keeps its last 4 town portals for its own town trips, and never pauses for the party while it's making or taking a portal. If a member does run out of town portals, it takes a party member's portal, the waypoint, or walks back to town instead of quitting the game.
+
 Every time the leader comes out of town into the field it **regroups**: it waits (up to `GatherWait` seconds, never with monsters close) for everyone to be next to it. If anyone has **Battle Orders** (barb) they cast it as soon as the party is together, and the leader waits until everyone has the buff before moving on.
 
 ### Host rotation
@@ -60,7 +64,7 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 |---|---|---|
 | `Enabled` | false | Master switch. Off = every profile plays solo |
 | `Groups` | | `"leader": ["follower", ...]` using profile names |
-| `WaitForMembers` | 90 | Seconds the leader waits at game start for online followers |
+| `WaitForMembers` | 120 | Seconds the leader waits at game start for online followers |
 | `PlanTimeout` | 30 | Seconds the leader waits for followers to say what they need |
 | `SyncTimeout` | 15 | Minutes the party waits on a slow member before moving on |
 | `LeaderLostTimeout` | 10 | Seconds before followers leave after the leader disappears |

@@ -43,7 +43,7 @@
     /**
      * @desc - seconds the leader waits at the start of each game for followers that are online to join
      */
-    WaitForMembers: 90,
+    WaitForMembers: 120,
 
     /**
      * @desc - seconds the leader waits for followers to answer "what do you still need?" before each script
