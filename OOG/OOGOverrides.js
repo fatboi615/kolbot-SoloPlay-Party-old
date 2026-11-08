@@ -1249,10 +1249,12 @@ const LocationAction = {
     // todo - really don't need use profiles set difficulty for online. Only single player so re-write difficulty stuff
     checkDifficulty();
 
-    // party leader - make the game in the lowest difficulty any online member still needs
+    // party host - make the game in the lowest difficulty any online member still needs
     if (Party.isLeader) {
       Starter.gameInfo.difficulty = Party.chooseDifficulty(Starter.gameInfo.difficulty);
     }
+    // tell the party whether this is the party's game (host) or our own (solo / catch-up)
+    Party.markHosting(Party.isLeader);
 
     Starter.gameInfo.gameName = DataFile.getStats().gameName;
     Starter.gameInfo.gamePass = Starter.randomString(5, true);
@@ -1341,6 +1343,7 @@ const LocationAction = {
       Controls.JoinGamePass.setText(target.pass);
       delay(250);
       lastPartyJoin = target.game;
+      Party.markHosting(false);
       Controls.JoinGame.click();
       Starter.lastGameStatus = "pending";
     } finally {

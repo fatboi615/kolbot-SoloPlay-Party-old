@@ -137,6 +137,14 @@
     TaxiWait: 90,
 
     /**
+     * @desc - host rotation: whoever is furthest behind (difficulty, then act) makes the games and runs the plan,
+     *   everyone else joins and helps it catch up. On a tie the leader from Groups hosts.
+     *   Also fixes quests that only work in a game made by someone who hasn't done them (Khalim's Will orb).
+     *   false = the leader from Groups always hosts.
+     */
+    HostRotation: true,
+
+    /**
      * @desc - hard cap on game length in party mode (minutes). The party ends the game after this.
      */
     MaxGameMinutes: 150,

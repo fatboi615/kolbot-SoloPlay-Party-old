@@ -51,6 +51,7 @@
     MaxCatchUpGames: 6,
     Taxi: true,
     TaxiWait: 90,
+    HostRotation: true,
     Debug: false,
   };
 
@@ -87,12 +88,16 @@
   })();
 
   const enabled = !!settings.Enabled && !!group;
-  const leader = enabled ? group.leader : "";
-  const followers = enabled ? group.followers : [];
-  const members = enabled ? [leader].concat(followers) : [];
-  const isLeader = enabled && leader === myProfile;
-  const isFollower = enabled && !isLeader;
-  const role = !enabled ? "solo" : (isLeader ? "leader" : "follower");
+  /** the leader from PartySettings - hosts unless someone is behind (HostRotation) */
+  const configuredLeader = enabled ? group.leader : "";
+  const members = enabled ? [configuredLeader].concat(group.followers) : [];
+  // who hosts / plans THIS game. Out of game it's worked out fresh each time (see Party.hostProfile),
+  // in game it's frozen to whoever made the game (setHost).
+  let leader = configuredLeader;
+  let followers = enabled ? group.followers.slice(0) : [];
+  let isLeader = enabled && leader === myProfile;
+  let isFollower = enabled && !isLeader;
+  let role = !enabled ? "solo" : (isLeader ? "leader" : "follower");
 
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
   // helpers
@@ -193,16 +198,99 @@
 
   const Party = {
     settings: settings,
-    leader: leader,
-    followers: followers,
+    configuredLeader: configuredLeader,
     members: members,
-    isLeader: isLeader,
     myProfile: myProfile,
     normDiff: normDiff,
     rank: rank,
     log: log,
     /** set while assisting so we don't steal someone else's quest item */
     blockQuestPickup: false,
+  };
+
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+  // Host rotation - whoever is furthest behind makes the games, everyone else joins and helps.
+  // (Quests like Khalim's Will only work in a game made by someone who hasn't done them.)
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+
+  /**
+   * How far along a member is: difficulty it's working on * 10 + act it has reached there.
+   * Read from its game file (written in game, kept between games); falls back to its wanted difficulty.
+   * @param {string} profile
+   */
+  Party.progressScore = function (profile) {
+    let info = Party.readGameFile(profile);
+    // character level breaks ties (lowest level counts as further behind)
+    let level = (info && (info.level || (info.progress && info.progress.level))) || 0;
+    if (info && info.progress && typeof info.progress.score === "number") return info.progress.score + level / 1000;
+    let oog = Party.readOog(profile);
+    return rank((oog && oog.wantDiff) || "Normal") * 10 + 1 + level / 1000;
+  };
+
+  let _frozenHost = "";
+  let _hostCache = { tick: 0, value: "" };
+
+  /** who should be making games right now */
+  Party.hostProfile = function () {
+    if (!enabled) return "";
+    if (_frozenHost) return _frozenHost;
+    if (!settings.HostRotation) return configuredLeader;
+    if (Date.now() - _hostCache.tick < 3000) return _hostCache.value;
+
+    const online = members.filter(function (m) {
+      return m === myProfile || fresh(Party.readOog(m), Math.min(settings.StaleAfter, 120));
+    });
+    // configured leader first so it wins ties
+    let best = online.includes(configuredLeader) ? configuredLeader : online[0];
+    let bestScore = Party.progressScore(best);
+    for (let m of online) {
+      let score = Party.progressScore(m);
+      if (score < bestScore) {
+        best = m;
+        bestScore = score;
+      }
+    }
+    _hostCache = { tick: Date.now(), value: best || configuredLeader };
+    return _hostCache.value;
+  };
+
+  /**
+   * Lock who hosts this game (in game only)
+   * @param {string} host
+   */
+  const setHost = function (host) {
+    _frozenHost = host || configuredLeader;
+    leader = _frozenHost;
+    followers = members.filter(function (m) {
+      return m !== leader;
+    });
+    isLeader = enabled && leader === myProfile;
+    isFollower = enabled && !isLeader;
+    role = isLeader ? "leader" : "follower";
+  };
+
+  /** out of game: remember whether the game we're making/joining is ours */
+  Party.markHosting = function (hosting) {
+    Party.oogHeartbeat(true, { hosting: !!hosting });
+  };
+
+  let _progress = { tick: 0, value: null };
+  /** our own progress, published in the game file */
+  const myProgress = function () {
+    if (_progress.value && Date.now() - _progress.tick < 10000) return _progress.value;
+    try {
+      let want = rank(Party.myWantDiff());
+      let act = 1;
+      if (me.diff === want) {
+        act = me.highestAct;
+      } else if (me.diff > want) {
+        act = 5;
+      }
+      _progress = { tick: Date.now(), value: { score: want * 10 + act, diff: DIFFS[want], act: act, level: me.charlvl } };
+    } catch (e) {
+      // keep the last one
+    }
+    return _progress.value;
   };
 
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -239,12 +327,32 @@
   let _catchUpCache = { tick: 0, value: false };
   /** follower currently playing solo to catch up on quests */
   Party.inCatchUp = function () {
-    if (!enabled || isLeader) return false;
+    if (!enabled) return false;
+    // furthest behind hosts the party's games instead of going solo
+    if (Party.hostProfile() === myProfile) return false;
     if (Date.now() - _catchUpCache.tick < 3000) return _catchUpCache.value;
     _catchUpCache = { tick: Date.now(), value: Party.stuckScripts().length > 0 };
     return _catchUpCache.value;
   };
 
+  Object.defineProperty(Party, "leader", {
+    get: function () {
+      return enabled ? Party.hostProfile() : "";
+    },
+  });
+  Object.defineProperty(Party, "followers", {
+    get: function () {
+      let host = Party.hostProfile();
+      return members.filter(function (m) {
+        return m !== host;
+      });
+    },
+  });
+  Object.defineProperty(Party, "isLeader", {
+    get: function () {
+      return enabled && Party.hostProfile() === myProfile;
+    },
+  });
   Object.defineProperty(Party, "enabled", {
     get: function () {
       return enabled && !Party.inCatchUp();
@@ -252,12 +360,14 @@
   });
   Object.defineProperty(Party, "isFollower", {
     get: function () {
-      return enabled && !isLeader && !Party.inCatchUp();
+      return enabled && Party.hostProfile() !== myProfile && !Party.inCatchUp();
     },
   });
   Object.defineProperty(Party, "role", {
     get: function () {
-      return Party.inCatchUp() ? "catchup" : role;
+      if (!enabled) return "solo";
+      if (Party.inCatchUp()) return "catchup";
+      return Party.hostProfile() === myProfile ? "leader" : "follower";
     },
   });
 
@@ -357,11 +467,12 @@
    * @returns {string}
    */
   Party.chooseDifficulty = function (wanted) {
-    if (!isLeader || !settings.SyncDifficulty) return wanted;
+    if (!Party.isLeader || !settings.SyncDifficulty) return wanted;
     let best = rank(wanted);
     let reason = "";
 
-    for (let f of followers) {
+    for (let f of members) {
+      if (f === myProfile) continue;
       let info = Party.readOog(f);
       if (!fresh(info, settings.StaleAfter)) continue;
       let r = rank(info.wantDiff);
@@ -384,7 +495,20 @@
    * @returns {{ game?: string, pass?: string, diff?: string, wait?: string }}
    */
   Party.getJoinTarget = function () {
+    let leader = Party.hostProfile();
     let info = Party.readOog(leader);
+    // whoever we think should host isn't, but another member is hosting a game - go there
+    if (!(info && fresh(info, 20) && info.status === "ingame" && info.hosting)) {
+      for (let m of members) {
+        if (m === myProfile || m === leader) continue;
+        let other = Party.readOog(m);
+        if (other && fresh(other, 20) && other.status === "ingame" && other.hosting && other.game) {
+          leader = m;
+          info = other;
+          break;
+        }
+      }
+    }
 
     if (!info || !fresh(info, 20)) {
       return { wait: "Waiting for leader " + leader + " to come online" };
@@ -436,7 +560,12 @@
       }
     }
 
-    log("Party mode ON - role: " + role + " | leader: " + leader + " | followers: " + followers.join(", "), true);
+    log(
+      "Party mode ON - role: " + Party.role + " | host: " + Party.hostProfile()
+      + " | configured leader: " + configuredLeader + " | members: " + members.join(", ")
+      + (settings.HostRotation ? " | host rotation on (furthest behind hosts)" : ""),
+      true
+    );
     return ok;
   };
 
@@ -502,6 +631,7 @@
         dead: !!me.dead,
         target: (_target && Date.now() - _target.tick < 3000) ? _target : null,
         canTele: canTele(),
+        progress: myProgress(),
       };
     } catch (e) {
       live = { tick: Date.now() };
@@ -782,31 +912,38 @@
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
   /** where each quest script does its work (only areas without a waypoint - those are the long walks) */
-  const taxiDestinations = {
-    bloodraven: sdk.areas.BurialGrounds,
-    countess: sdk.areas.TowerCellarLvl5,
-    smith: sdk.areas.Barracks,
-    andariel: sdk.areas.CatacombsLvl4,
-    radament: sdk.areas.A2SewersLvl3,
-    cube: sdk.areas.HallsoftheDeadLvl3,
-    amulet: sdk.areas.ClawViperTempleLvl2,
-    staff: sdk.areas.MaggotLairLvl3,
-    eye: sdk.areas.SpiderCavern,
-    heart: sdk.areas.A3SewersLvl2,
-    brain: sdk.areas.FlayerDungeonLvl3,
-    mephisto: sdk.areas.DuranceofHateLvl3,
-    izual: sdk.areas.PlainsofDespair,
-    diablo: sdk.areas.ChaosSanctuary,
-    shenk: sdk.areas.BloodyFoothills,
-    anya: sdk.areas.FrozenRiver,
-    ancients: sdk.areas.ArreatSummit,
-    baal: sdk.areas.ThroneofDestruction,
+  /** @type {Record<string, number> | null} */
+  let _taxiDestinations = null;
+  const taxiDestinations = function () {
+    if (!_taxiDestinations) {
+      _taxiDestinations = {
+        bloodraven: sdk.areas.BurialGrounds,
+        countess: sdk.areas.TowerCellarLvl5,
+        smith: sdk.areas.Barracks,
+        andariel: sdk.areas.CatacombsLvl4,
+        radament: sdk.areas.A2SewersLvl3,
+        cube: sdk.areas.HallsoftheDeadLvl3,
+        amulet: sdk.areas.ClawViperTempleLvl2,
+        staff: sdk.areas.MaggotLairLvl3,
+        eye: sdk.areas.SpiderCavern,
+        heart: sdk.areas.A3SewersLvl2,
+        brain: sdk.areas.FlayerDungeonLvl3,
+        mephisto: sdk.areas.DuranceofHateLvl3,
+        izual: sdk.areas.PlainsofDespair,
+        diablo: sdk.areas.ChaosSanctuary,
+        shenk: sdk.areas.BloodyFoothills,
+        anya: sdk.areas.FrozenRiver,
+        ancients: sdk.areas.ArreatSummit,
+        baal: sdk.areas.ThroneofDestruction,
+      };
+    }
+    return _taxiDestinations;
   };
 
   /** @param {string} script */
   Party.taxiDestination = function (script) {
     if (!settings.Taxi) return 0;
-    let area = taxiDestinations[script];
+    let area = taxiDestinations()[script];
     if (!area) return 0;
     try {
       if (Pather.wpAreas.includes(area)) return 0;
@@ -1708,6 +1845,23 @@
     if (!Party.enabled || _initialized) return false;
     _initialized = true;
 
+    // who made this game is the host for this game
+    let gameHost = "";
+    for (let m of members) {
+      let info = Party.readOog(m);
+      if (info && info.hosting && info.status === "ingame" && sameGame(info.game)) {
+        gameHost = m;
+        break;
+      }
+    }
+    // no host flag found (shouldn't happen) - same answer for everyone: configured leader if it's here
+    if (!gameHost) {
+      gameHost = (configuredLeader === myProfile || Party.inGame(configuredLeader)) ? configuredLeader : Party.hostProfile();
+    }
+    setHost(gameHost);
+    Party.state.role = role;
+    log("This game's host: " + leader + (leader !== configuredLeader ? " (furthest behind)" : ""), true);
+
     // invite / accept everyone (games are passworded so it's just us)
     Config.PublicMode = true;
 
@@ -1822,6 +1976,21 @@
         CharData.updateData("me", "setDifficulty", updatedDifficulty);
         !me.realm && Messaging.sendToScript("D2BotSoloPlay.dbj", "diffChange");
       }
+    }
+
+    // quests we were stuck on that got done in this game (e.g. we hosted)
+    try {
+      let stuck = Party.readStuck();
+      let changed = false;
+      Object.keys(stuck.scripts).forEach(function (script) {
+        if (!stillNeeds(script)) {
+          delete stuck.scripts[script];
+          changed = true;
+        }
+      });
+      changed && writeStuck(stuck);
+    } catch (e) {
+      // ignore
     }
 
     Party.state.ready = false;

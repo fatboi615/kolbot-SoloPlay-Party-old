@@ -4,7 +4,7 @@ Run several SoloPlay characters **in the same game, leveling together**. One pro
 
 ## How a game plays out
 
-1. The leader makes the game in the **lowest difficulty any online member still needs**. Followers join it.
+1. The host makes the game in the **lowest difficulty any online member still needs** - the host is the `Groups` leader, or whoever is furthest behind (see Host rotation). Everyone else joins it.
 2. Everyone invites/accepts into the in-game party. The leader waits (up to `WaitForMembers`) until followers are in game, ready and partied.
 3. The leader walks the normal SoloPlay script list. Before each script it asks every follower "do you still need this?"
    - **Both need it** (den, andariel...): the leader runs it, followers stick to the leader and **attack the leader's target**. Afterwards a follower that still needs the quest either just **talks to the NPC** for the reward (den, blood raven, tristram, radament, izual) or runs the script itself with the leader helping.
@@ -18,11 +18,16 @@ While the leader is running a script it:
 
 If the **leader leaves** (chicken, death, crash), followers leave within `LeaderLostTimeout` seconds and wait at the join screen for the leader's next game. If a **follower** chickens, it rejoins the leader's game and picks up where the party is.
 
+### Host rotation
+Whoever is **furthest behind** (difficulty first, then act, then level) makes the games and runs the plan; everyone else joins and helps them catch up. On a tie the leader from `Groups` hosts. So when the leader finishes Normal (kills Baal) and a follower is still in act 3, the follower hosts Normal games until it catches up, and the rest join it.
+
+This also fixes quests that only work in a game made by someone who hasn't done them yet - like **Khalim's Will**, where the Compelling Orb is already broken in a game made by someone who finished it. Turn it off with `HostRotation: false` (the `Groups` leader always hosts).
+
 ### Taxi
 A follower that can **teleport** (a sorc) is the party's taxi. At the start of each quest whose area has no waypoint (Catacombs 4, Radament's sewers, Durance 3, Chaos Sanctuary, Throne...), it teleports there, opens a town portal and comes back through it. Everyone else waits in town (up to `TaxiWait` seconds) and takes that portal instead of walking. If the taxi can't make it, they carry on like normal.
 
 ### Catch-up mode
-Some quests can't be finished in a game made by someone who already finished them - e.g. **Khalim's Will**: the Compelling Orb is already broken, so a follower that missed the credit can never smash it in the leader's games and never gets to Mephisto / act 4. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.
+With host rotation the furthest-behind member hosts, so this is only needed when a follower is stuck on a quest but isn't the one furthest behind. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.
 
 Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel catch-up).
 
@@ -63,6 +68,7 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 | `LeaderWaits` | true | Leader pauses when a follower falls behind |
 | `WaitDistance` | 25 | Yards back that counts as "behind" |
 | `MaxWaitSeconds` | 8 | Longest single pause |
+| `HostRotation` | true | Furthest-behind member hosts the games, everyone joins to catch it up |
 | `Taxi` | true | A teleporting follower opens portals to quest areas for everyone |
 | `TaxiWait` | 90 | Seconds the others wait in town for the taxi's portal |
 | `CatchUpAfterFails` | 2 | Failed party games on the same quest before a follower goes solo to catch up |
@@ -74,7 +80,8 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 
 Console (with `Debug: true`):
 ```
-[Party] Party mode ON - role: follower | leader: scl-pal | followers: scl-sorc
+[Party] Party mode ON - role: follower | host: scl-barb | configured leader: scl-pal | members: scl-pal, scl-sorc, scl-barb | host rotation on (furthest behind hosts)
+[Party] This game's host: scl-barb (furthest behind)
 [Party] Partied with leader scl-pal
 [Party] Starting with scl-sorc (expected: scl-sorc) | in party: scl-sorc
 [Party] Step 1: den | running: scl-pal, scl-sorc
