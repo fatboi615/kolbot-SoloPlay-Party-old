@@ -19,7 +19,7 @@ While the leader is running a script it:
 If the **leader leaves** (chicken, death, crash), followers leave within `LeaderLostTimeout` seconds and wait at the join screen for the leader's next game. If a **follower** chickens, it rejoins the leader's game and picks up where the party is.
 
 ### Town trips, regroup and Battle Orders
-When the leader pops to town in the middle of a quest, followers **hold at its portal** in the field (clearing anything close) instead of following it into town. When the leader heads back to that same area it goes **through its own portal** (not the waypoint), so it lands right where everyone is waiting; anywhere else it drops a fresh portal for them.
+When the leader pops to town in the middle of a quest, followers **hold at its portal** in the field (clearing anything close) instead of following it into town. When the leader heads back to that same area it goes **through its own portal** (not the waypoint), so it lands right where everyone is waiting; anywhere else it drops a fresh portal for them. Going back through your own portal closes it in D2, so if anyone is still in town the leader **opens a new portal** right away and waits for them. Followers in town always look for the leader's (or taxi's) portal at the portal spot before falling back to the waypoint.
 
 Every time the leader comes out of town into the field it **regroups**: it waits (up to `GatherWait` seconds, never with monsters close) for everyone to be next to it. If anyone has **Battle Orders** (barb) they cast it as soon as the party is together, and the leader waits until everyone has the buff before moving on.
 

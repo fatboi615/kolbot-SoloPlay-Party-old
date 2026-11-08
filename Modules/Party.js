@@ -609,12 +609,18 @@
   /** leader: regroup after coming out of town */
   let _gather = null;
   let _gatherCount = 0;
+  /** when we last came out of town - a portal made before this is gone if we came back through it */
+  let _leftTownAt = 0;
 
   /** published in our game file every heartbeat */
   const trackTownTrip = function () {
     try {
       if (!me.inTown) {
         // just came back out of town while running our own script - regroup the party here
+        if (_townTrip && Date.now() - _leftTownAt > 3000) {
+          // heartbeat is up to a second late, so back-date it a little
+          _leftTownAt = Date.now() - 1000;
+        }
         if (_townTrip && isLeader && _leaderBusy && settings.GatherWait > 0) {
           _gatherCount += 1;
           _gather = { id: _gatherCount, area: me.area, until: Date.now() + Time.seconds(settings.GatherWait) };
@@ -1245,10 +1251,10 @@
         Town.goToTown();
       }
 
-      // their portal is the quickest way if we are in town
+      // their portal is the quickest way if we are in town - it drops us right next to them
       if (me.inTown) {
-        // portals are only visible up close - if we can't waypoint there, go stand by the portal spot and look
-        if (!haveWp && !Pather.getPortal(area, name)) {
+        // portals are only visible up close, so go stand by the portal spot and look before using the waypoint
+        if (!Pather.getPortal(area, name)) {
           me.overhead("Party: looking for " + name + "'s portal");
           Town.move("portalspot");
         }
@@ -1265,7 +1271,7 @@
             return true;
           }
           return false;
-        }, haveWp ? 1000 : 6000, 250);
+        }, 8000, 250);
         if (portal) {
           Town.move("portalspot");
           ok = Pather.usePortal(area, owner);
@@ -1913,6 +1919,28 @@
       _gather = null;
       return false;
     }
+
+    // our portal closed when we came back through it - open a new one for anyone not here yet
+    if (!_gather.portal) {
+      _gather.portal = true;
+      let away = active.filter(function (f) {
+        let info = Party.readGame(f);
+        return !!info && !info.dead && info.area !== me.area;
+      });
+      let justMadeOne = (_portalAreas[me.area] || 0) > _leftTownAt;
+      if (away.length && !justMadeOne && !monstersNear(15)) {
+        try {
+          if (Pather.makePortal(false)) {
+            _portalAreas[me.area] = Date.now();
+            // give them time to walk to the portal spot and come through
+            _gather.until = Math.max(_gather.until, Date.now() + Time.seconds(30));
+            log("Portal back up in " + getAreaName(me.area) + " for " + away.join(", "));
+          }
+        } catch (e) {
+          console.warn("Party :: couldn't re-open portal - " + (e.message || e));
+        }
+      }
+    }
     const boInParty = settings.BattleOrders && (hasBO() || active.some(function (f) {
       let info = Party.readGame(f);
       return !!info && info.hasBO;
@@ -1999,7 +2027,8 @@
   /** Leader: put a town portal down when we arrive somewhere a follower isn't */
   const leaderPortal = function () {
     if (!settings.LeaderPortals || !isLeader || me.inTown || me.dead) return;
-    if (_portalAreas[me.area] && Date.now() - _portalAreas[me.area] < Time.minutes(2)) return;
+    // already put one down here since we last left town (going back through our own portal closes it)
+    if ((_portalAreas[me.area] || 0) > _leftTownAt) return;
 
     let needs = Party.activeFollowers().filter(function (f) {
       let info = Party.readGame(f);
@@ -2122,8 +2151,10 @@
     if (isLeader && settings.LeaderPortals) {
       const originalUseWaypoint = Pather.useWaypoint;
       Pather.useWaypoint = function () {
+        let wasInTown = me.inTown;
         let result = originalUseWaypoint.apply(this, arguments);
         try {
+          wasInTown && !me.inTown && (_leftTownAt = Date.now() - 500);
           _leaderBusy && !me.inTown && leaderPortal();
         } catch (e) {
           // ignore
