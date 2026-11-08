@@ -126,6 +126,17 @@
     MaxCatchUpGames: 6,
 
     /**
+     * @desc - taxi: a follower that can teleport (sorc) runs ahead to the next quest area (Catacombs 4, Durance 3,
+     *   Chaos Sanctuary...) and opens a town portal. Everyone else waits in town and takes it instead of walking.
+     */
+    Taxi: true,
+
+    /**
+     * @desc - seconds the others wait in town for the taxi's portal before walking/waypointing like normal
+     */
+    TaxiWait: 90,
+
+    /**
      * @desc - hard cap on game length in party mode (minutes). The party ends the game after this.
      */
     MaxGameMinutes: 150,

@@ -49,6 +49,8 @@
     MaxGameMinutes: 150,
     CatchUpAfterFails: 2,
     MaxCatchUpGames: 6,
+    Taxi: true,
+    TaxiWait: 90,
     Debug: false,
   };
 
@@ -462,9 +464,23 @@
     doneStep: 0,
     running: "",
     finishedGame: "",
+    /** @type {{ step: number, area: number, ready: boolean, failed: boolean } | null} */
+    taxi: null,
   };
 
   let _lastGameWrite = 0;
+  let _canTele = { tick: 0, value: false };
+  /** can we teleport (cached, it's checked every heartbeat) */
+  const canTele = function () {
+    if (Date.now() - _canTele.tick > 10000) {
+      try {
+        _canTele = { tick: Date.now(), value: !!Pather.canTeleport() && !Config.NoTele };
+      } catch (e) {
+        _canTele = { tick: Date.now(), value: false };
+      }
+    }
+    return _canTele.value;
+  };
   /** @type {{ gid: number, classid: number, x: number, y: number, area: number, tick: number } | null} */
   let _target = null;
 
@@ -485,6 +501,7 @@
         diff: DIFFS[me.diff] || "",
         dead: !!me.dead,
         target: (_target && Date.now() - _target.tick < 3000) ? _target : null,
+        canTele: canTele(),
       };
     } catch (e) {
       live = { tick: Date.now() };
@@ -621,6 +638,8 @@
    */
   const runMine = function (script) {
     let result = "error";
+    _scriptName = script;
+    _scriptStep = Party.state.step || _scriptStep;
     Party.blockQuestPickup = false;
     Party.state.running = script;
     Party.writeGame();
@@ -632,6 +651,7 @@
       console.error(e);
       result = "error";
     } finally {
+      _scriptName = "";
       _leaderBusy = false;
       doneThisPass.add(script);
       Party.state.running = "";
@@ -757,6 +777,155 @@
   };
 
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+  // Taxi - a follower that can teleport runs ahead to the next quest area and opens a town portal,
+  // everyone else waits in town and takes it instead of walking
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+
+  /** where each quest script does its work (only areas without a waypoint - those are the long walks) */
+  const taxiDestinations = {
+    bloodraven: sdk.areas.BurialGrounds,
+    countess: sdk.areas.TowerCellarLvl5,
+    smith: sdk.areas.Barracks,
+    andariel: sdk.areas.CatacombsLvl4,
+    radament: sdk.areas.A2SewersLvl3,
+    cube: sdk.areas.HallsoftheDeadLvl3,
+    amulet: sdk.areas.ClawViperTempleLvl2,
+    staff: sdk.areas.MaggotLairLvl3,
+    eye: sdk.areas.SpiderCavern,
+    heart: sdk.areas.A3SewersLvl2,
+    brain: sdk.areas.FlayerDungeonLvl3,
+    mephisto: sdk.areas.DuranceofHateLvl3,
+    izual: sdk.areas.PlainsofDespair,
+    diablo: sdk.areas.ChaosSanctuary,
+    shenk: sdk.areas.BloodyFoothills,
+    anya: sdk.areas.FrozenRiver,
+    ancients: sdk.areas.ArreatSummit,
+    baal: sdk.areas.ThroneofDestruction,
+  };
+
+  /** @param {string} script */
+  Party.taxiDestination = function (script) {
+    if (!settings.Taxi) return 0;
+    let area = taxiDestinations[script];
+    if (!area) return 0;
+    try {
+      if (Pather.wpAreas.includes(area)) return 0;
+    } catch (e) {
+      // ignore
+    }
+    return area;
+  };
+
+  /** the party's taxi: first follower in game that can teleport (the leader drops its own portals) */
+  Party.taxiProfile = function () {
+    if (!settings.Taxi) return "";
+    for (let f of followers) {
+      if (f === myProfile) {
+        if (canTele() && !me.dead) return f;
+        continue;
+      }
+      let info = Party.readGame(f);
+      if (info && info.ready && info.canTele && !info.dead && Party.inGame(f)) return f;
+    }
+    return "";
+  };
+
+  /** what we're doing right now - used by the waypoint hook to decide whether to wait for the taxi */
+  let _scriptStep = 0;
+  let _scriptName = "";
+  /** steps we already rode the taxi for */
+  const _taxiRidden = {};
+
+  /**
+   * Taxi: teleport to the quest area, open a portal and come back to town through it (so it stays open).
+   * @param {number} step
+   * @param {string} script
+   */
+  const taxiRun = function (step, script) {
+    const area = Party.taxiDestination(script);
+    if (!area) return;
+    const act = sdk.areas.actOf(area);
+    if (!me.accessToAct(act)) return;
+
+    Party.state.taxi = { step: step, area: area, ready: false, failed: false };
+    Party.writeGame();
+    me.overhead("Party: taxi to " + getAreaName(area));
+    log(me.name + " teleporting ahead to " + getAreaName(area) + " for " + script);
+
+    let ok = false;
+    try {
+      !me.inTown && Town.goToTown();
+      Pather.journeyTo(area);
+      if (me.inArea(area)) {
+        ok = !!Pather.makePortal(true);
+      }
+    } catch (e) {
+      console.warn("Party :: taxi to " + getAreaName(area) + " failed - " + (e.message || e));
+    }
+
+    // back in town through our own portal so it stays open (making a new one would close it)
+    if (!me.inTown) {
+      try {
+        Pather.usePortal(null, me.name) || Town.goToTown();
+      } catch (e) {
+        Town.goToTown();
+      }
+    }
+
+    Party.state.taxi = { step: step, area: area, ready: ok, failed: !ok };
+    Party.writeGame();
+    log(ok ? "Taxi portal is open to " + getAreaName(area) : "Taxi couldn't open a portal to " + getAreaName(area), true);
+  };
+
+  /**
+   * Before a script waypoints off on its own, see if the taxi is (or will shortly be) waiting with a portal.
+   * @param {number} targetArea - where the script wanted to waypoint
+   * @returns {boolean} true if we went through the taxi portal instead
+   */
+  const rideTaxi = function (targetArea) {
+    if (!settings.Taxi || !_scriptStep || _taxiRidden[_scriptStep]) return false;
+    const dest = Party.taxiDestination(_scriptName);
+    if (!dest || me.inArea(dest) || sdk.areas.Towns.includes(targetArea)) return false;
+    const taxi = Party.taxiProfile();
+    if (!taxi || taxi === myProfile) return false;
+    const act = sdk.areas.actOf(dest);
+    if (!me.accessToAct(act) || sdk.areas.actOf(targetArea) !== act) return false;
+
+    _taxiRidden[_scriptStep] = true;
+    const name = Party.charNameOf(taxi);
+    !me.inTown && Town.goToTown(act);
+    me.act !== act && Town.goToTown(act);
+
+    // wait for the taxi to get there
+    const start = getTickCount();
+    let state = null;
+    while (getTickCount() - start < Time.seconds(settings.TaxiWait)) {
+      let info = Party.readGame(taxi);
+      state = info && info.taxi && info.taxi.step === _scriptStep ? info.taxi : null;
+      if (state && (state.ready || state.failed)) break;
+      if (!Party.inGame(taxi)) break;
+      me.overhead("Party: waiting for " + name + "'s portal to " + getAreaName(dest));
+      Party.keepAlive();
+      delay(500);
+    }
+    if (!state || !state.ready) return false;
+
+    try {
+      Town.move("portalspot");
+      let portal = Misc.poll(function () {
+        return Pather.getPortal(dest, name);
+      }, 6000, 250);
+      if (portal && Pather.usePortal(dest, name)) {
+        log(me.name + " took " + name + "'s portal to " + getAreaName(dest));
+        return true;
+      }
+    } catch (e) {
+      console.warn("Party :: taxi ride failed - " + (e.message || e));
+    }
+    return false;
+  };
+
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
   // Assist - follow a party member and fight with them
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
@@ -859,12 +1028,23 @@
           me.overhead("Party: looking for " + name + "'s portal");
           Town.move("portalspot");
         }
+        let taxi = Party.taxiProfile();
+        let taxiName = taxi ? (taxi === myProfile ? me.name : Party.charNameOf(taxi)) : "";
+        let owner = name;
         let portal = Misc.poll(function () {
-          return Pather.getPortal(area, name);
+          if (Pather.getPortal(area, name)) {
+            owner = name;
+            return true;
+          }
+          if (taxiName && Pather.getPortal(area, taxiName)) {
+            owner = taxiName;
+            return true;
+          }
+          return false;
         }, haveWp ? 1000 : 6000, 250);
         if (portal) {
           Town.move("portalspot");
-          ok = Pather.usePortal(area, name);
+          ok = Pather.usePortal(area, owner);
         }
       }
 
@@ -1350,7 +1530,13 @@
       if (ls.phase === "run" && ls.step > handledRun) {
         handledRun = ls.step;
         handledPlan = Math.max(handledPlan, ls.step);
+        _scriptStep = ls.step;
         const needers = Array.isArray(ls.needers) ? ls.needers : [];
+
+        // we can teleport - run ahead and open a portal for everyone
+        if (Party.taxiProfile() === myProfile && Party.taxiDestination(ls.script)) {
+          taxiRun(ls.step, ls.script);
+        }
 
         if (needers.includes(myProfile)) {
           if (settings.LeaderLedScripts && needers.includes(leader)) {
@@ -1563,6 +1749,19 @@
       }
       return true;
     };
+
+    // everyone: when the taxi is opening a portal to where this script is going, take it instead of the waypoint
+    if (settings.Taxi) {
+      const waypointBeforeTaxi = Pather.useWaypoint;
+      Pather.useWaypoint = function (targetArea) {
+        try {
+          if (_scriptName && rideTaxi(targetArea)) return true;
+        } catch (e) {
+          console.warn("Party :: taxi hook - " + (e.message || e));
+        }
+        return waypointBeforeTaxi.apply(this, arguments);
+      };
+    }
 
     // leader: drop a portal after arriving somewhere new so followers without the waypoint can come
     if (isLeader && settings.LeaderPortals) {

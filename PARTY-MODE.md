@@ -18,6 +18,9 @@ While the leader is running a script it:
 
 If the **leader leaves** (chicken, death, crash), followers leave within `LeaderLostTimeout` seconds and wait at the join screen for the leader's next game. If a **follower** chickens, it rejoins the leader's game and picks up where the party is.
 
+### Taxi
+A follower that can **teleport** (a sorc) is the party's taxi. At the start of each quest whose area has no waypoint (Catacombs 4, Radament's sewers, Durance 3, Chaos Sanctuary, Throne...), it teleports there, opens a town portal and comes back through it. Everyone else waits in town (up to `TaxiWait` seconds) and takes that portal instead of walking. If the taxi can't make it, they carry on like normal.
+
 ### Catch-up mode
 Some quests can't be finished in a game made by someone who already finished them - e.g. **Khalim's Will**: the Compelling Orb is already broken, so a follower that missed the credit can never smash it in the leader's games and never gets to Mephisto / act 4. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.
 
@@ -60,6 +63,8 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 | `LeaderWaits` | true | Leader pauses when a follower falls behind |
 | `WaitDistance` | 25 | Yards back that counts as "behind" |
 | `MaxWaitSeconds` | 8 | Longest single pause |
+| `Taxi` | true | A teleporting follower opens portals to quest areas for everyone |
+| `TaxiWait` | 90 | Seconds the others wait in town for the taxi's portal |
 | `CatchUpAfterFails` | 2 | Failed party games on the same quest before a follower goes solo to catch up |
 | `MaxCatchUpGames` | 6 | Most solo catch-up games before rejoining anyway |
 | `MaxGameMinutes` | 150 | Hard cap on a party game |
@@ -76,6 +81,9 @@ Console (with `Debug: true`):
 [Party] Portal down in Cold Plains for scl-sorc
 [Party] MySorc collected den reward from akara
 [Party] Leader left the game - leaving and waiting for the next one
+[Party] MySorc teleporting ahead to Catacombs Level 4 for andariel
+[Party] Taxi portal is open to Catacombs Level 4
+[Party] MyPal took MySorc's portal to Catacombs Level 4
 [Party] MyBarb failed travincal in a party game (2/2)
 [Party] scl-barb is playing solo to catch up on: travincal
 [Party] MyBarb is caught up - rejoining the party next game
