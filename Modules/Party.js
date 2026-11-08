@@ -52,6 +52,9 @@
     Taxi: true,
     TaxiWait: 90,
     HostRotation: true,
+    HoldAtPortal: true,
+    GatherWait: 20,
+    BattleOrders: true,
     Debug: false,
   };
 
@@ -598,6 +601,56 @@
   };
 
   let _lastGameWrite = 0;
+  // ---------- town trips, regroup and Battle Orders ----------
+  /** last place we stood outside town */
+  let _lastField = null;
+  /** set while we're in town after coming from the field - where our portal back is */
+  let _townTrip = null;
+  /** leader: regroup after coming out of town */
+  let _gather = null;
+  let _gatherCount = 0;
+
+  /** published in our game file every heartbeat */
+  const trackTownTrip = function () {
+    try {
+      if (!me.inTown) {
+        // just came back out of town while running our own script - regroup the party here
+        if (_townTrip && isLeader && _leaderBusy && settings.GatherWait > 0) {
+          _gatherCount += 1;
+          _gather = { id: _gatherCount, area: me.area, until: Date.now() + Time.seconds(settings.GatherWait) };
+        }
+        _townTrip = null;
+        _lastField = { area: me.area, x: me.x, y: me.y, tick: Date.now() };
+        return null;
+      }
+      if (!_townTrip && _lastField && Date.now() - _lastField.tick < 4000) {
+        _townTrip = { area: _lastField.area, x: _lastField.x, y: _lastField.y, tick: Date.now() };
+      }
+      return _townTrip;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  let _hasBO = { tick: 0, value: false };
+  const hasBO = function () {
+    if (Date.now() - _hasBO.tick > 30000) {
+      try {
+        _hasBO = { tick: Date.now(), value: me.getSkill(sdk.skills.BattleOrders, sdk.skills.subindex.SoftPoints) > 0 };
+      } catch (e) {
+        _hasBO = { tick: Date.now(), value: false };
+      }
+    }
+    return _hasBO.value;
+  };
+  const haveBOState = function () {
+    try {
+      return !!me.getState(sdk.states.BattleOrders);
+    } catch (e) {
+      return false;
+    }
+  };
+
   let _canTele = { tick: 0, value: false };
   /** can we teleport (cached, it's checked every heartbeat) */
   const canTele = function () {
@@ -632,6 +685,10 @@
         target: (_target && Date.now() - _target.tick < 3000) ? _target : null,
         canTele: canTele(),
         progress: myProgress(),
+        townTrip: trackTownTrip(),
+        gather: _gather ? { id: _gather.id, area: _gather.area } : null,
+        hasBO: hasBO(),
+        bo: haveBOState(),
       };
     } catch (e) {
       live = { tick: Date.now() };
@@ -1212,6 +1269,8 @@
    * @param {string} name - their char name
    * @returns {boolean} true if we attacked something
    */
+  let _lastBOGather = 0;
+
   const focusFire = function (profile, name) {
     const start = getTickCount();
     let attacked = false;
@@ -1275,6 +1334,21 @@
 
       // they are in town - meet them there
       if (sdk.areas.Towns.includes(area)) {
+        // they popped to town from where we are - hold at their portal until they come back
+        let trip = info && sameGame(info.game) ? info.townTrip : null;
+        if (settings.HoldAtPortal && trip && !me.inTown && me.inArea(trip.area) && Date.now() - trip.tick < Time.minutes(3)) {
+          if (getDistance(me.x, me.y, trip.x, trip.y) > 6) {
+            try {
+              Pather.moveNear(trip.x, trip.y, 4);
+            } catch (e) {
+              // ignore
+            }
+          }
+          Attack.clear(10);
+          me.overhead("Party: holding at " + name + "'s portal");
+          delay(250);
+          return true;
+        }
         if (!me.inTown || me.act !== act) {
           me.accessToAct(act) ? Town.goToTown(act) : Town.goToTown();
         }
@@ -1300,6 +1374,19 @@
       // same area - stay close and fight what they are fighting
       let unit = Misc.getPlayerUnit(name);
       let [tx, ty] = unit ? [unit.x, unit.y] : [partyUnit.x, partyUnit.y];
+
+      // 0. leader is regrouping - if we have Battle Orders, buff the party once we're next to them
+      let gather = info && sameGame(info.game) ? info.gather : null;
+      if (settings.BattleOrders && gather && gather.id !== _lastBOGather && hasBO() && tx && ty
+        && getDistance(me.x, me.y, tx, ty) <= 12) {
+        _lastBOGather = gather.id;
+        try {
+          me.overhead("Party: Battle Orders!");
+          Precast.doPrecast(true);
+        } catch (e) {
+          console.warn("Party :: battle orders failed - " + (e.message || e));
+        }
+      }
 
       // 1. hit their target first
       if (focusFire(profile, name)) {
@@ -1782,6 +1869,65 @@
    * Leader: hold still for a moment if a follower is falling behind. Never while monsters are close.
    * Runs from the background worker inside delay(), so the leader's script is simply paused.
    */
+  /** leader: after coming out of town, wait for everyone to gather and get Battle Orders */
+  const gatherCheck = function () {
+    if (!_gather || !_leaderBusy) return false;
+    if (me.inTown || me.dead || Date.now() > _gather.until || !me.inArea(_gather.area)) {
+      _gather = null;
+      return false;
+    }
+
+    const active = Party.activeFollowers();
+    if (!active.length) {
+      _gather = null;
+      return false;
+    }
+    const boInParty = settings.BattleOrders && (hasBO() || active.some(function (f) {
+      let info = Party.readGame(f);
+      return !!info && info.hasBO;
+    }));
+
+    const notReady = function () {
+      return active.filter(function (f) {
+        let info = Party.readGame(f);
+        if (!info || info.dead || !Party.inGame(f)) return false;
+        if (info.area !== me.area || getDistance(me.x, me.y, info.x, info.y) > 12) return true;
+        return boInParty && !info.bo;
+      });
+    };
+
+    let waiting = notReady();
+    if (!waiting.length && (!boInParty || haveBOState())) {
+      _gather = null;
+      return false;
+    }
+
+    let castBO = false;
+    me.overhead("Party: regrouping" + (boInParty ? " for Battle Orders" : ""));
+    while (Date.now() < _gather.until) {
+      if (me.dead || monstersNear(15)) break;
+      global._delay ? global._delay(250) : nativeSleep(250);
+      Party.writeGame();
+      waiting = notReady();
+      // everyone's here - if we're the one with BO, cast it now
+      let here = waiting.filter(function (f) {
+        let info = Party.readGame(f);
+        return !!info && (info.area !== me.area || getDistance(me.x, me.y, info.x, info.y) > 12);
+      });
+      if (!here.length && hasBO() && !castBO) {
+        castBO = true;
+        try {
+          Precast.doPrecast(true);
+        } catch (e) {
+          // ignore
+        }
+      }
+      if (!waiting.length && (!boInParty || haveBOState())) break;
+    }
+    _gather = null;
+    return true;
+  };
+
   const paceCheck = function () {
     if (!settings.LeaderWaits || !_leaderBusy) return;
     if (Date.now() - _lastPaceCheck < 1500 || Date.now() < _paceCooldownUntil) return;
@@ -1897,12 +2043,36 @@
           Party.writeGame();
         }
         isFollower && leaderWatchdog();
-        isLeader && paceCheck();
+        isLeader && (gatherCheck() || paceCheck());
       } catch (e) {
         // never let the heartbeat kill the main thread
       }
       return true;
     };
+
+    // leader: heading back to the area we just popped to town from - use our own portal (followers are waiting at it)
+    if (isLeader && settings.HoldAtPortal) {
+      const waypointBeforeReturn = Pather.useWaypoint;
+      Pather.useWaypoint = function (targetArea) {
+        try {
+          if (_leaderBusy && me.inTown && _townTrip && targetArea === _townTrip.area
+            && Date.now() - _townTrip.tick < Time.minutes(3)) {
+            let back = _townTrip.area;
+            Town.move("portalspot");
+            let portal = Misc.poll(function () {
+              return Pather.getPortal(back, me.name);
+            }, 3000, 250);
+            if (portal && Pather.usePortal(back, me.name)) {
+              log("Back through our portal to " + getAreaName(back));
+              return true;
+            }
+          }
+        } catch (e) {
+          console.warn("Party :: portal back failed - " + (e.message || e));
+        }
+        return waypointBeforeReturn.apply(this, arguments);
+      };
+    }
 
     // everyone: when the taxi is opening a portal to where this script is going, take it instead of the waypoint
     if (settings.Taxi) {

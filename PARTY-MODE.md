@@ -18,6 +18,11 @@ While the leader is running a script it:
 
 If the **leader leaves** (chicken, death, crash), followers leave within `LeaderLostTimeout` seconds and wait at the join screen for the leader's next game. If a **follower** chickens, it rejoins the leader's game and picks up where the party is.
 
+### Town trips, regroup and Battle Orders
+When the leader pops to town in the middle of a quest, followers **hold at its portal** in the field (clearing anything close) instead of following it into town. When the leader heads back to that same area it goes **through its own portal** (not the waypoint), so it lands right where everyone is waiting; anywhere else it drops a fresh portal for them.
+
+Every time the leader comes out of town into the field it **regroups**: it waits (up to `GatherWait` seconds, never with monsters close) for everyone to be next to it. If anyone has **Battle Orders** (barb) they cast it as soon as the party is together, and the leader waits until everyone has the buff before moving on.
+
 ### Host rotation
 Whoever is **furthest behind** (difficulty first, then act, then level) makes the games and runs the plan; everyone else joins and helps them catch up. On a tie the leader from `Groups` hosts. So when the leader finishes Normal (kills Baal) and a follower is still in act 3, the follower hosts Normal games until it catches up, and the rest join it.
 
@@ -69,6 +74,9 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 | `WaitDistance` | 25 | Yards back that counts as "behind" |
 | `MaxWaitSeconds` | 8 | Longest single pause |
 | `HostRotation` | true | Furthest-behind member hosts the games, everyone joins to catch it up |
+| `HoldAtPortal` | true | Followers wait at the leader's portal while it's in town; leader returns through it |
+| `GatherWait` | 20 | Seconds the leader waits after leaving town for everyone to gather / get BO (0 = off) |
+| `BattleOrders` | true | Party member with BO buffs everyone at each regroup |
 | `Taxi` | true | A teleporting follower opens portals to quest areas for everyone |
 | `TaxiWait` | 90 | Seconds the others wait in town for the taxi's portal |
 | `CatchUpAfterFails` | 2 | Failed party games on the same quest before a follower goes solo to catch up |
@@ -95,7 +103,7 @@ Console (with `Debug: true`):
 [Party] scl-barb is playing solo to catch up on: travincal
 [Party] MyBarb is caught up - rejoining the party next game
 ```
-Overhead: `Party: waiting for scl-sorc`, `Party: going to <name> (<area>)`, `Party: looking for <name>'s portal`.
+Overhead: `Party: holding at <leader>'s portal`, `Party: regrouping for Battle Orders`, `Party: Battle Orders!`, `Party: waiting for scl-sorc`, `Party: going to <name> (<area>)`, `Party: looking for <name>'s portal`.
 
 ## Debugging
 

@@ -145,6 +145,25 @@
     HostRotation: true,
 
     /**
+     * @desc - when the leader pops to town in the middle of a quest, followers hold at its portal in the field
+     *   (clearing anything close) instead of following it to town. The leader goes back through its own portal
+     *   when it returns to the same area; anywhere else it drops a fresh portal for them.
+     */
+    HoldAtPortal: true,
+
+    /**
+     * @desc - seconds the leader waits after coming out of town for everyone to gather (and get Battle Orders)
+     *   before carrying on. Never waits with monsters close. 0 = don't regroup.
+     */
+    GatherWait: 20,
+
+    /**
+     * @desc - if anyone in the party has Battle Orders (barb), they cast it when the party regroups and the
+     *   leader waits until everyone has the buff
+     */
+    BattleOrders: true,
+
+    /**
      * @desc - hard cap on game length in party mode (minutes). The party ends the game after this.
      */
     MaxGameMinutes: 150,
