@@ -21,6 +21,7 @@ Thanks for helping test! Party mode lets several **Kolbot-SoloPlay** characters 
 2. **Back up** your current `d2bs\kolbot\libs\SoloPlay` folder (zip it or copy it somewhere).
 3. Extract the drop-in zip into your **D2BotNG folder** (the one with `D2BotNG.exe` and `d2bs`). It only contains `d2bs\kolbot\libs\SoloPlay\...`, so it drops straight into place. Say **yes** to replacing files.
    - Your own `Settings\Settings.js`, `Settings\AdvancedSettings.js`, `OOG\StarterConfig.js`, character data and logins are **not** in the zip, so they are kept.
+   - Never ran kolbot's `setup.bat`? Those three files are created for you from the `+setup` templates the first time a profile starts. If kolbot itself then complains about other missing config files, run `setup.bat` in your kolbot folder once.
 4. Open `d2bs\kolbot\libs\SoloPlay\Settings\PartySettings.js` and set your group. Use your **D2BotNG profile names**:
    ```js
    Enabled: true,

@@ -12,6 +12,27 @@
 include("critical.js"); // required
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// First run on an install that never ran kolbot's setup.bat: make SoloPlay's own config files from the
+// +setup templates (same as setup.bat does). Existing files are never touched.
+(function () {
+  [
+    ["+setup/StarterConfig.js", "OOG/StarterConfig.js"],
+    ["+setup/Settings.js", "Settings/Settings.js"],
+    ["+setup/AdvancedSettings.js", "Settings/AdvancedSettings.js"],
+  ].forEach(function (f) {
+    const src = "libs/SoloPlay/" + f[0];
+    const dest = "libs/SoloPlay/" + f[1];
+    try {
+      if (!FileTools.exists(dest) && FileTools.exists(src)) {
+        FileTools.writeText(dest, FileTools.readText(src));
+        print("ÿc8SoloPlayÿc0 :: created " + dest + " from the +setup template (first run)");
+      }
+    } catch (e) {
+      print("ÿc1SoloPlayÿc0 :: couldn't create " + dest + " - " + (e.message || e));
+    }
+  });
+})();
+
 const { StarterConfig } = (function () {
   if (!FileTools.exists("libs/SoloPlay/OOG/StarterConfig.js")) {
     throw new Error("Missing SoloPlay StarterConfig.js file. Please run setup.bat to generate it.");
