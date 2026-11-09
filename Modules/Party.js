@@ -1978,15 +1978,30 @@
   const rusheeIn = function (rusherName) {
     rushRevive();
     const area = rosterArea(rusherName);
-    if (!area || sdk.areas.Towns.includes(area)) return false;
+    if (!area || sdk.areas.Towns.includes(area)) {
+      log("Rush: " + rusherName + " isn't out in an area yet (" + (area ? getAreaName(area) : "unknown") + ")");
+      return false;
+    }
     const act = sdk.areas.actOf(area);
     !me.inTown && Town.goToTown();
     me.act !== act && me.accessToAct(act) && Town.goToTown(act);
     Town.move("portalspot");
     const take = function () {
-      return !!Misc.poll(function () {
-        return Pather.getPortal(area, rusherName);
-      }, Time.seconds(8), 250) && Pather.usePortal(area, rusherName);
+      // the portal can take a moment to show up - keep looking from the portal spot
+      let found = null;
+      for (let i = 0; i < 3 && !found; i += 1) {
+        i > 0 && Town.move("portalspot");
+        found = Misc.poll(function () {
+          return Pather.getPortal(area, rusherName);
+        }, Time.seconds(10), 250);
+      }
+      if (!found) {
+        log("Rush: can't see " + rusherName + "'s portal to " + getAreaName(area) + " from " + getAreaName(me.area));
+        return false;
+      }
+      let used = Pather.usePortal(area, rusherName);
+      log(used ? "Rush: took " + rusherName + "'s portal to " + getAreaName(area) : "Rush: couldn't use " + rusherName + "'s portal to " + getAreaName(area));
+      return used;
     };
     me.overhead("Party: taking " + rusherName + "'s portal to " + getAreaName(area));
     switch (area) {
@@ -2103,9 +2118,34 @@
     let lost = 0;
     const queue = [];
     let retries = 0;
+    /** step:area we already went into this step (so the portal fallback doesn't send us in twice) */
+    const visited = {};
+    let outSince = 0;
+    let doneSince = 0;
+    const questDone = function (q) {
+      try {
+        return Misc.checkQuest(q, sdk.quest.states.Completed) || Misc.checkQuest(q, sdk.quest.states.ReqComplete);
+      } catch (e) {
+        return false;
+      }
+    };
+    let lastLook = 0;
+    let step = 0;
+    const rushAreas = [sdk.areas.CatacombsLvl4, sdk.areas.DurielsLair, sdk.areas.DuranceofHateLvl3, sdk.areas.ChaosSanctuary];
+    const queueCall = function (m, why) {
+      if (queue.indexOf(m) > -1) return;
+      queue.push(m);
+      log("Rush: " + (why || rusherName + " says '" + m + "'"));
+    };
     Party.state.running = "being rushed";
     Party.writeGame();
     log(me.name + " is being rushed by " + rusherName, true);
+    try {
+      let rf = Party.readGameFile(leader);
+      log("Rush: listening for " + rusherName + "'s calls (" + (rf && rf.sayTracked ? "party file" : "game chat") + "), and following its portals");
+    } catch (e) {
+      // ignore
+    }
     try {
       !me.inTown && Town.goToTown();
       Town.move("portalspot");
@@ -2121,16 +2161,50 @@
         lost = 0;
         const rushing = ls.phase === "run" && String(ls.script || "").indexOf("rush:") === 0;
         rushing && (last = ls.step);
+        step = ls.step || step;
 
         calls.next().forEach(function (m) {
-          if (m === RUSH_IN || m === RUSH_OUT || m.indexOf("changeact") === 0) queue.push(m);
+          if (m === RUSH_IN || m === RUSH_OUT || m.indexOf("changeact") === 0) queueCall(m);
         });
         if (!rushing && !queue.length) break;
 
         me.dead && rushRevive();
+        const rArea = rosterArea(rusherName);
+
+        // no call (yet)? follow what the rusher is actually doing
+        if (!queue.length && rArea) {
+          const rTown = sdk.areas.Towns.includes(rArea);
+          if (me.inTown && !rTown && (rushAreas.includes(rArea) || isTalTomb(rArea)) && !visited[step + ":" + rArea]
+            && Date.now() - lastLook > 3000) {
+            lastLook = Date.now();
+            if (Pather.getPortal(rArea, rusherName)) {
+              queueCall(RUSH_IN, "no call from " + rusherName + " yet, but its portal to " + getAreaName(rArea) + " is open - going in");
+            }
+          }
+          // out in the field and the rusher has left us here - head back
+          if (!me.inTown && rArea !== me.area) {
+            !outSince && (outSince = Date.now());
+            Date.now() - outSince > 6000 && queueCall(RUSH_OUT, rusherName + " left " + getAreaName(me.area) + " - going back to town");
+          } else {
+            outSince = 0;
+          }
+        }
+        // the boss we're here for is dead (our quest log says so) - move on to the next act like the rusher
+        // would tell us to (it waits for us there before the next boss)
+        const boss = rushOrder().find(function (r) {
+          return "rush:" + r.name === String(ls.script || "");
+        });
+        if (!queue.length && boss && me.act === boss.act && questDone(boss.quest)) {
+          !doneSince && (doneSince = Date.now());
+          Date.now() - doneSince > 6000 && queueCall("changeact " + (boss.act + 1), boss.name + " is done - heading to act " + (boss.act + 1));
+        } else {
+          doneSince = 0;
+        }
+
         if (queue.length) {
           let cmd = queue[0];
           let ok = false;
+          const inArea = cmd === RUSH_IN ? rArea : 0;
           try {
             if (cmd === RUSH_IN) ok = rusheeIn(rusherName);
             else if (cmd === RUSH_OUT) ok = rusheeOut(rusherName);
@@ -2138,9 +2212,17 @@
           } catch (e) {
             console.warn("Party :: rush call '" + cmd + "' failed - " + (e.message || e));
           }
-          if (ok || ++retries > 3) {
+          ok && inArea && (visited[step + ":" + inArea] = Date.now());
+          if (ok) {
             queue.shift();
             retries = 0;
+          } else if (++retries > 6) {
+            log("Rush: gave up on '" + cmd + "' after " + retries + " tries");
+            queue.shift();
+            retries = 0;
+          } else {
+            log("Rush: '" + cmd + "' didn't work (try " + retries + "), trying again");
+            delay(3000);
           }
         } else if (me.inTown) {
           try {
@@ -2190,7 +2272,9 @@
           let m = /^changeact\s*(\d)/.exec(msg);
           m && (wantAct = Math.max(wantAct, Number(m[1])));
         });
-        const act = Math.max(wantAct, ls.act || 0) || me.act;
+        // follow the act changes: from the rusher's calls, where the rusher is, or where the one being rushed is
+        let rusheeInfo = ls.rushee ? Party.readGame(ls.rushee) : null;
+        const act = Math.max(wantAct, ls.act || 0, (rusheeInfo && rusheeInfo.act) || 0) || me.act;
         try {
           !me.inTown && Town.goToTown();
           if (me.act !== act && me.accessToAct(act)) {
