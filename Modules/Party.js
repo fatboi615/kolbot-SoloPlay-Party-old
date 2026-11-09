@@ -58,6 +58,9 @@
     PortalHoldMinutes: 10,
     GatherWait: 30,
     BossWait: 45,
+    // at a boss, wait up to this long when someone who still needs that quest isn't there yet
+    // (usually on a town trip) - cheaper than everyone walking the whole area again for a dead boss
+    BossWaitNeeders: 90,
     Rush: true,
     RushWhenBehindActs: 1,
     Rusher: "",
@@ -1048,6 +1051,12 @@
   };
 
   /** quest scripts whose failure is worth catching up on (not farming/leveling runs that always "need" to run) */
+  /** quests that are a boss kill: once the party killed it, the boss is gone for the rest of the game */
+  const bossQuests = [
+    "bloodraven", "countess", "smith", "andariel", "radament", "summoner", "duriel", "mephisto",
+    "izual", "diablo", "shenk", "ancients", "baal",
+  ];
+
   const questScripts = [
     "den", "bloodraven", "tristram", "countess", "smith", "andariel", "cube", "radament", "amulet", "staff",
     "summoner", "tombs", "duriel", "lamessen", "eye", "heart", "brain", "travincal", "mephisto", "izual",
@@ -2441,6 +2450,13 @@
             if (stillNeed && collectReward(ls.script)) {
               stillNeed = questNotDone(ls.script);
             }
+            // still need it but the boss already died in this game (we were in town, too far...)? running it
+            // again only walks the whole area for nothing - try again next game
+            if (stillNeed && bossQuests.includes(ls.script)) {
+              log(me.name + " missed the " + ls.script + " kill - it's dead in this game, trying again next game");
+              noteAttempt(ls.script);
+              stillNeed = false;
+            }
             // still need it after that (no quest credit, etc)? run it ourselves, leader will come help
             if (stillNeed && Party.inGame(leader)) {
               log(me.name + " still needs " + ls.script + " after following, running it now");
@@ -2765,7 +2781,16 @@
     if (kind === "exit" && !boss) return; // walking through - pace checks keep them close
     if (kind !== "return" && _regroupedAt[me.area] && Date.now() - _regroupedAt[me.area] < Time.seconds(60)) return;
     _regroupedAt[me.area] = Date.now();
-    regroup(boss ? Math.max(settings.GatherWait, settings.BossWait) : settings.GatherWait);
+    let seconds = boss ? Math.max(settings.GatherWait, settings.BossWait) : settings.GatherWait;
+    if (boss) {
+      // anyone who still needs this boss for their quest and isn't here yet? give them longer
+      const needers = (Party.state && Array.isArray(Party.state.needers)) ? Party.state.needers : [];
+      const missing = notWithUs(helpers.filter(function (h) {
+        return needers.includes(h);
+      }), settings.WaitDistance);
+      if (missing.length) seconds = Math.max(seconds, settings.BossWaitNeeders || 0);
+    }
+    regroup(seconds);
   };
 
   /**

@@ -194,6 +194,13 @@
     BossWait: 45,
 
     /**
+     * @desc - at a boss, wait up to this long (seconds) when a member who still needs that quest isn't there yet
+     * (usually on a town trip). Cheaper than walking the whole area again for a boss that's already dead.
+     * @type {number}
+     */
+    BossWaitNeeders: 90,
+
+    /**
      * @desc - if anyone in the party has Battle Orders (barb), they cast it when the party regroups and the
      *   leader waits until everyone has the buff
      */

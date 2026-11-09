@@ -113,6 +113,7 @@ Diablo II 1.14d can't scale its window; stretching add-ons like cnc-ddraw rescal
 | `RushWhenBehindActs` | 1 | How many acts behind (another difficulty = always) before rushing |
 | `Rusher` | "" | Profile that rushes; empty = highest level member that can teleport |
 | `HoldAtPortal` | true | Followers wait at the leader's portal while it's in town; leader returns through it |
+| `BossWaitNeeders` | 90 | At a boss, wait this long for a member that still needs the quest (it can't get credit once the boss is dead) |
 | `PortalHoldMinutes` | 10 | How long followers keep waiting at that portal (town trips and TownChicken) before going to find the leader |
 | `GatherWait` | 30 | Seconds the runner waits for its helpers (and BO) when it arrives by waypoint/portal or comes back from town (0 = off) |
 | `BossWait` | 45 | Same, when it walks into a boss / quest area |
