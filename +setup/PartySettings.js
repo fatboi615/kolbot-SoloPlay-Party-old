@@ -145,6 +145,23 @@
     HostRotation: true,
 
     /**
+     * @desc - rush: when one member is far behind (a brand new character), the party's teleporter (sorc) makes
+     *   the game and rushes it through the act bosses (kolbot's own AutoRush), so it catches up with everyone.
+     *   Everyone else waits in town and follows the act changes. false = no rushing, just play it normally.
+     */
+    Rush: true,
+
+    /**
+     * @desc - rush when the one behind is at least this many acts behind everyone else (another difficulty = always)
+     */
+    RushWhenBehindActs: 1,
+
+    /**
+     * @desc - profile that does the rushing. "" = the highest level member that can teleport
+     */
+    Rusher: "",
+
+    /**
      * @desc - when the leader pops to town in the middle of a quest, followers hold at its portal in the field
      *   (clearing anything close) instead of following it to town. The leader goes back through its own portal
      *   when it returns to the same area; anywhere else it drops a fresh portal for them.
