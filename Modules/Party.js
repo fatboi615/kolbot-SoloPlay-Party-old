@@ -1138,6 +1138,38 @@
   let _scriptName = "";
   /** steps we already rode the taxi for */
   const _taxiRidden = {};
+  /** taxi: the areas we went through on the way to the portal spot (riders skip walking back through them) */
+  let _taxiPath = null;
+  /**
+   * rider: we came through the taxi portal to `area` - the script's own way there (areas in `approach`) is done
+   * @type {{ step: number, area: number, approach: number[] } | null}
+   */
+  let _taxiLanded = null;
+
+  const notePath = function () {
+    try {
+      if (_taxiPath && me.area && !me.inTown && _taxiPath[_taxiPath.length - 1] !== me.area) _taxiPath.push(me.area);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  /**
+   * After a taxi ride the script still runs its own "get there" moves (waypoint -> clear to exit -> clear to exit...).
+   * Standing at the destination, a move back toward an area on the way there is already done - skip it, or the
+   * script walks all the way back (Arreat Summit -> Ancient's Way, Maggot Lair 3 -> Far Oasis...).
+   * @param {number | number[]} target
+   * @returns {boolean} true = skip the move, we're past it
+   */
+  const pastByTaxi = function (target) {
+    const t = _taxiLanded;
+    if (!t || t.step !== _scriptStep || !me.inArea(t.area)) return false;
+    const list = Array.isArray(target) ? target : [target];
+    if (!list.length) return false;
+    return list.every(function (a) {
+      return a === t.area || t.approach.includes(a);
+    });
+  };
 
   /**
    * Taxi: teleport to the quest area, open a portal and come back to town through it (so it stays open).
@@ -1156,13 +1188,19 @@
     log(me.name + " teleporting ahead to " + getAreaName(area) + " for " + script);
 
     let ok = false;
+    let path = [];
     try {
       !me.inTown && Town.goToTown();
+      _taxiPath = [];
       Pather.journeyTo(area);
+      notePath();
+      path = _taxiPath.slice(0);
+      _taxiPath = null;
       if (me.inArea(area)) {
         ok = !!Pather.makePortal(true);
       }
     } catch (e) {
+      _taxiPath = null;
       console.warn("Party :: taxi to " + getAreaName(area) + " failed - " + (e.message || e));
     }
 
@@ -1175,7 +1213,7 @@
       }
     }
 
-    Party.state.taxi = { step: step, area: area, ready: ok, failed: !ok };
+    Party.state.taxi = { step: step, area: area, ready: ok, failed: !ok, path: path };
     Party.writeGame();
     log(ok ? "Taxi portal is open to " + getAreaName(area) : "Taxi couldn't open a portal to " + getAreaName(area), true);
   };
@@ -1220,6 +1258,13 @@
       }, 6000, 250);
       if (portal && Pather.usePortal(dest, name)) {
         log(me.name + " took " + name + "'s portal to " + getAreaName(dest));
+        let approach = (Array.isArray(state.path) ? state.path : []).concat([targetArea]);
+        _taxiLanded = {
+          step: _scriptStep, area: dest,
+          approach: approach.filter(function (a, i) {
+            return !!a && a !== dest && !sdk.areas.Towns.includes(a) && approach.indexOf(a) === i;
+          }),
+        };
         return true;
       }
     } catch (e) {
@@ -2813,10 +2858,44 @@
 
     // everyone: when the taxi is opening a portal to where this script is going, take it instead of the waypoint
     if (settings.Taxi) {
+      // ...and once we're there through its portal, the script's own walk there is already done
+      const journeyBeforeTaxi = Pather.journeyTo;
+      Pather.journeyTo = function (area) {
+        _taxiPath && notePath();
+        if (pastByTaxi(area)) return true;
+        let result = journeyBeforeTaxi.apply(this, arguments);
+        _taxiPath && notePath();
+        return result;
+      };
+      const exitBeforeTaxi = Pather.moveToExit;
+      Pather.moveToExit = function (targetArea) {
+        _taxiPath && notePath();
+        if (pastByTaxi(targetArea)) return true;
+        // part of a chain is behind us - carry on from where we are
+        if (Array.isArray(targetArea) && _taxiLanded && _taxiLanded.step === _scriptStep && me.inArea(_taxiLanded.area)) {
+          let at = targetArea.indexOf(me.area);
+          if (at > -1 && at === targetArea.length - 1) return true;
+          if (at > -1) {
+            let args = Array.prototype.slice.call(arguments);
+            args[0] = targetArea.slice(at + 1);
+            return exitBeforeTaxi.apply(this, args);
+          }
+        }
+        let result = exitBeforeTaxi.apply(this, arguments);
+        _taxiPath && notePath();
+        return result;
+      };
+      const clearBeforeTaxi = Pather.clearToExit;
+      Pather.clearToExit = function (currentArea, targetArea) {
+        if (pastByTaxi(targetArea)) return true;
+        return clearBeforeTaxi.apply(this, arguments);
+      };
       const waypointBeforeTaxi = Pather.useWaypoint;
       Pather.useWaypoint = function (targetArea) {
         try {
           if (_scriptName && rideTaxi(targetArea)) return true;
+          // already past that waypoint through the taxi portal
+          if (pastByTaxi(targetArea)) return true;
         } catch (e) {
           console.warn("Party :: taxi hook - " + (e.message || e));
         }
@@ -2874,6 +2953,7 @@
     const moveBeforePace = Pather.move;
     Pather.move = function () {
       let result = moveBeforePace.apply(this, arguments);
+      _taxiPath && notePath();
       try {
         // moves keep happening during TownChicken / chores when the background heartbeat is blocked
         Date.now() - _lastGameWrite > 1000 && Party.writeGame();
