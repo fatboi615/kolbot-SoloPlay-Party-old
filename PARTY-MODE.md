@@ -31,12 +31,13 @@ This also fixes quests that only work in a game made by someone who hasn't done 
 A follower that can **teleport** (a sorc) is the party's taxi. At the start of each quest whose area has no waypoint (Catacombs 4, Radament's sewers, Durance 3, Chaos Sanctuary, Throne...), it teleports there, opens a town portal and comes back through it. Everyone else waits in town (up to `TaxiWait` seconds) and takes that portal instead of walking. If the taxi can't make it, they carry on like normal.
 
 ### Rush (new characters catch up fast)
-Add a brand new character to a party that's already ahead and it doesn't have to walk every act. When the member furthest behind is at least `RushWhenBehindActs` acts behind everyone else (or everyone else is in a later difficulty), the party's **teleporter (sorc) makes the game and rushes it** through the act bosses it still needs - Andariel, Duriel, Mephisto, Diablo - up to the act the rest of the party is in.
+Add a brand new character to a party that's already ahead and it doesn't have to walk every act. When the member furthest behind is at least `RushWhenBehindActs` acts behind everyone else (or everyone else is in a later difficulty), **that character makes the game and the party's teleporter (sorc) rushes it** through the quests it still needs - staff, Summoner, Duriel, Travincal, Mephisto, Diablo - up to the act the rest of the party is in.
 
-- The rusher runs **kolbot's own AutoRush** routines (`libs/systems/autorush`), unchanged. The new character answers its calls: "1" come through my portal, "2" go back to town, "changeact N" travel to the next act (Warriv, Jerhyn + Meshif, the red portal, Tyrael).
-- The rusher makes the game on purpose: in its game Tal Rasha's chamber, the Travincal orb and the Durance are already open, so the new character only needs to be there for the kills.
+- The new character **makes the game on purpose**: quest objects (Tal Rasha's tomb, the Travincal orb, the Durance) follow the game maker, so the one being rushed has to host - otherwise it can't get through the boss portals. This is how kolbot's own rush is built too.
+- The new character runs **kolbot's own `scripts/Rushee.js`** and the sorc runs **kolbot's own AutoRush** routines (`libs/systems/autorush`), unchanged. They talk in game chat: "1" come through my portal, "2" go back to town, "changeact N" travel to the next act. Rushee.js handles the staff, NPC talks and act travel itself.
 - Everyone else waits in town and follows the act changes (the rusher waits for the whole party to be in the next act).
-- After the rush the party plays normally again - the new character is still the furthest behind, so it hosts and everyone helps it level.
+- When it's done the sorc says "quit", everyone leaves, and the next game is normal party play - the new character is usually still the furthest behind, so it hosts and everyone helps it level.
+- If a rush fails 3 times in 3 hours without the new character reaching a new act, party mode stops trying and plays normally.
 
 ### Catch-up mode
 With host rotation the furthest-behind member hosts, so this is only needed when a follower is stuck on a quest but isn't the one furthest behind. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.

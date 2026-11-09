@@ -258,13 +258,7 @@
         bestScore = score;
       }
     }
-    // a member far behind gets rushed: the rusher hosts (in its game the tomb / orb / Durance are already open)
-    try {
-      let rush = Party.rushPlan();
-      rush && (best = rush.rusher);
-    } catch (e) {
-      // ignore
-    }
+    // a member far behind gets rushed in a game IT makes - that's already `best` (the furthest behind)
     _hostCache = { tick: Date.now(), value: best || configuredLeader };
     return _hostCache.value;
   };
@@ -1654,41 +1648,39 @@
   };
 
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // Rush - a brand new (far behind) member gets rushed through the act bosses by the party's
-  // teleporter so it catches up with everyone else. The rusher runs kolbot's own AutoRush routines
-  // (libs/systems/autorush) unchanged; the rushee answers its calls ("1" come in, "2" go out,
-  // "changeact N"), which the rusher also writes to its party file so nothing is missed.
-  // Other members wait in town during the rush (the rusher waits for everyone to change act).
+  // Rush - a brand new (far behind) member gets rushed through the acts by the party's teleporter
+  // so it catches up with everyone else, the way kolbot's own AutoRush system does it:
+  //  - the one being rushed MAKES THE GAME (quest objects - the orifice, Travincal - follow the game
+  //    maker) and runs kolbot's scripts/Rushee.js: it picks up the cube / staff parts, cubes and places
+  //    the staff, talks to the npcs and changes acts on the rusher's chat calls ("1", "2", "changeact N")
+  //  - the rusher runs kolbot's AutoRush steps (libs/systems/autorush) for what it still needs
+  //  - everyone else waits in town and follows the act changes
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
-  const RUSH_IN = "1";  // AutoRush.playersIn
-  const RUSH_OUT = "2"; // AutoRush.playersOut
-
-  let _rushOrder = null;
-  /** act bosses we rush, in order. Killing the boss of act N lets you into act N + 1. */
-  const rushOrder = function () {
-    if (!_rushOrder) {
-      _rushOrder = [
-        { name: "andariel", act: 1, quest: sdk.quest.id.SistersToTheSlaughter },
-        { name: "duriel", act: 2, quest: sdk.quest.id.TheSevenTombs },
-        { name: "mephisto", act: 3, quest: sdk.quest.id.TheGuardian },
-        { name: "diablo", act: 4, quest: sdk.quest.id.TerrorsEnd },
-      ];
+  /** the AutoRush steps we use, in order, and the act each one is in. Side quests are left to normal party play. */
+  const RUSH_STEPS = [
+    ["andariel", 1], ["cube", 2], ["amulet", 2], ["staff", 2], ["summoner", 2], ["duriel", 2],
+    ["travincal", 3], ["mephisto", 3], ["diablo", 4],
+  ];
+  const rushStepAct = function (name) {
+    for (let i = 0; i < RUSH_STEPS.length; i++) {
+      if (RUSH_STEPS[i][0] === name) return RUSH_STEPS[i][1];
     }
-    return _rushOrder;
+    return 9;
   };
 
   let _rushNeeds = { tick: 0, value: [] };
-  /** which act bosses we still need (published in our game file for the rusher) */
+  /** the AutoRush steps we still need, by kolbot's own quest checks (published for the rusher) */
   const rushNeeds = function () {
     if (Date.now() - _rushNeeds.tick < 5000) return _rushNeeds.value;
     try {
+      const { sequenceCheck } = require("../../systems/autorush/RushConstants");
       _rushNeeds = {
         tick: Date.now(),
-        value: rushOrder().filter(function (r) {
-          return !Misc.checkQuest(r.quest, sdk.quest.states.Completed) && !Misc.checkQuest(r.quest, sdk.quest.states.ReqComplete);
-        }).map(function (r) {
-          return r.name;
+        value: RUSH_STEPS.filter(function (st) {
+          return !!sequenceCheck[st[0]] && !sequenceCheck[st[0]].check();
+        }).map(function (st) {
+          return st[0];
         }),
       };
     } catch (e) {
@@ -1697,11 +1689,18 @@
     return _rushNeeds.value;
   };
 
+  /** rush attempts for a profile at its current act - stop trying after 3 failed games in the same act */
+  const rushFailFile = function (profile) {
+    return filePath(profile, "rush");
+  };
+
   /** everything the rusher says in game (kolbot's AutoRush talks over chat) - numbered so the rushee can't miss one */
   const _said = [];
   let _saidSeq = 0;
-  /** true once our say() wrapper is in place (else the rushee falls back to listening to chat) */
+  /** true once our say() wrapper is in place */
   let _sayTracked = false;
+  /** during a rush the rusher and rushee talk over real game chat (SoloPlay normally keeps chat silent) */
+  let _rushChat = false;
 
   /**
    * Should this game be a rush? The member furthest behind gets rushed when it is at least
@@ -1749,510 +1748,132 @@
       });
     }
     if (!rusher) return null;
+    // three rush games in a row that didn't get it out of this act: stop trying, play it normally
+    let tries = readJSON(rushFailFile(rushee));
+    if (tries && tries.count >= 3 && Date.now() - (tries.tick || 0) < Time.minutes(180)) {
+      let info = Party.readGameFile(rushee);
+      let act = info && info.progress ? info.progress.act : 0;
+      if (!act || act === tries.act) return null;
+    }
     return { rushee: rushee, rusher: rusher, targetAct: targetAct };
   };
 
   /**
-   * Leader (the rusher): run kolbot's AutoRush routine for every act boss the rushee still needs.
+   * We are being rushed and made this game: run kolbot's Rushee script until the rusher says "quit".
    * @param {{ rushee: string, rusher: string, targetAct: number }} rush
    * @param {number} step
-   * @returns {number} the last step used
    */
-  const runRush = function (rush, step) {
-    let lib = null;
+  const runAsRushee = function (rush, step) {
+    const seqs = rushNeeds().filter(function (n) {
+      return rushStepAct(n) < rush.targetAct;
+    });
+    if (!seqs.length) return step;
+    const rusherName = Party.charNameOf(rush.rusher);
+    if (!rusherName) return step;
+
+    // count this attempt (reset when we've made it to a new act)
+    let tries = readJSON(rushFailFile(myProfile)) || {};
+    tries = tries.act === me.highestAct ? tries : { act: me.highestAct, count: 0 };
+    tries.count += 1;
+    tries.tick = Date.now();
+    writeJSON(rushFailFile(myProfile), tries);
+
+    step += 1;
+    Object.assign(Party.state, {
+      step: step, phase: "run", script: "rush", rusher: rush.rusher, rushee: myProfile, rushSeqs: seqs,
+      needers: [myProfile], running: "being rushed by " + rusherName,
+    });
+    Party.writeGame();
+    log("Being rushed by " + rusherName + " (try " + tries.count + "): " + seqs.join(", "), true);
+
     try {
-      lib = require("../../systems/autorush/AutoRush");
+      const { RushConfig } = require("../../systems/autorush/RushConfig");
+      const { RushModes } = require("../../systems/autorush/RushConstants");
+      RushConfig[me.profile] = { type: RushModes.quester, config: { Leader: rusherName } };
+      Config.Leader = rusherName;
+      if (!isIncluded("scripts/Rushee.js") && !include("scripts/Rushee.js")) throw new Error("couldn't load scripts/Rushee.js");
+      _rushChat = true;
+      // kolbot's Rushee: answers the rusher's calls until it says "quit", then leaves the game
+      // kolbot's scripts are top-level `const X = new Runnable(...)` (the Loader finds them on global)
+      const rushee = typeof Rushee !== "undefined" ? Rushee : global.Rushee;
+      if (!rushee || typeof rushee.action !== "function") throw new Error("scripts/Rushee.js has no action");
+      rushee.action();
     } catch (e) {
-      log("Rush: couldn't load kolbot's AutoRush (" + (e.message || e) + ") - playing normally", true);
-      return step;
+      log("Rush: kolbot's Rushee stopped - " + (e.message || e), true);
     }
-    const name = Party.charNameOf(rush.rushee);
-    // wait for the rushee to tell us which bosses it still needs
-    let info = Misc.poll(function () {
-      let i = Party.readGame(rush.rushee);
-      return i && i.ready && Array.isArray(i.rushNeeds) ? i : null;
-    }, Time.seconds(45), 500);
-    if (!info || !name) {
-      log("Rush: " + rush.rushee + " never showed up - playing normally", true);
-      return step;
-    }
-    log("Rushing " + name + " to act " + rush.targetAct + " (needs: " + info.rushNeeds.join(", ") + ")", true);
-
-    for (let r of rushOrder()) {
-      if (r.act >= rush.targetAct) break;
-      if (!Party.keepAlive() || me.dead || !Party.inGame(rush.rushee)) break;
-      info = Party.readGame(rush.rushee);
-      if (!info || !Array.isArray(info.rushNeeds) || !info.rushNeeds.includes(r.name)) continue;
-
-      step += 1;
-      // rushSeq: the rushee reads our calls from here on, even ones made before it started listening
-      Object.assign(Party.state, { step: step, phase: "run", script: "rush:" + r.name, needers: [myProfile], rushee: rush.rushee, running: "rushing " + r.name, rushSeq: _saidSeq });
-      Party.writeGame();
-      log("Step " + step + ": rushing " + name + " through " + r.name, true);
-      me.overhead("Party: rushing " + name + " - " + r.name);
-
-      let ok = false;
-      try {
-        ok = !!lib[r.name](name);
-      } catch (e) {
-        console.warn("Party :: rush " + r.name + " failed - " + (e.message || e));
-        ok = false;
-      }
-      Party.state.doneStep = step;
-      Party.state.running = "";
-      Party.writeGame();
-
-      // give the rushee time to change act and report the quest
-      let got = Misc.poll(function () {
-        let i = Party.readGame(rush.rushee);
-        return !!i && Array.isArray(i.rushNeeds) && !i.rushNeeds.includes(r.name);
-      }, ok ? Time.seconds(90) : Time.seconds(5), 1000);
-      log(name + (got ? " got " : " did NOT get ") + r.name + " from the rush", true);
-      if (!ok || !got) {
-        log("Rush stopped - carrying on normally", true);
-        break;
-      }
-    }
-    Party.state.rushee = "";
-    Party.state.script = "";
+    _rushChat = false;
+    Party.state.running = "";
     Party.writeGame();
     return step;
   };
 
-  /** where a party member is right now (the game's party roster works across areas) */
-  const rosterArea = function (charName) {
-    try {
-      let p = getParty();
-      if (p) {
-        do {
-          if (p.name === charName) return p.area;
-        } while (p.getNext());
-      }
-    } catch (e) {
-      // ignore
-    }
-    return 0;
-  };
-
-  const rushRevive = function () {
-    try {
-      while (me.mode === sdk.player.mode.Death) delay(40);
-      if (me.mode === sdk.player.mode.Dead) {
-        me.revive();
-        Misc.poll(function () {
-          return me.inTown;
-        }, Time.seconds(10), 100);
-      }
-    } catch (e) {
-      // ignore
-    }
-  };
-
-  const isTalTomb = function (area) {
-    return [sdk.areas.TalRashasTomb1, sdk.areas.TalRashasTomb2, sdk.areas.TalRashasTomb3, sdk.areas.TalRashasTomb4,
-      sdk.areas.TalRashasTomb5, sdk.areas.TalRashasTomb6, sdk.areas.TalRashasTomb7].includes(area);
-  };
-
-  /** Duriel's lair: talk to Tyrael, take the portal he opens */
-  const tyraelTalk = function (rusherName) {
-    try {
-      let npc = Game.getNPC(NPC.Tyrael);
-      if (!npc) {
-        Pather.moveTo(22577, 15609);
-        npc = Misc.poll(function () {
-          return Game.getNPC(NPC.Tyrael);
-        }, 3000, 250);
-      }
-      if (!npc) return false;
-      for (let i = 0; i < 3; i += 1) {
-        npc.distance > 3 && Pather.moveToUnit(npc);
-        npc.interact();
-        delay(1000 + me.ping);
-        me.cancel();
-        if (Pather.getPortal(null)) break;
-      }
-      return Pather.usePortal(null) || Pather.usePortal(null, rusherName);
-    } catch (e) {
-      return false;
-    }
-  };
-
-  /** Tal Rasha's tomb: if we carry the Horadric Staff, put it in the orifice */
-  const placeStaff = function () {
-    try {
-      let staff = me.completestaff;
-      let orifice = Game.getObject(sdk.quest.chest.HoradricStaffHolder);
-      if (!staff || !orifice) return false;
-      Misc.openChest(orifice);
-      staff = me.completestaff;
-      if (!staff) return false;
-      staff.toCursor();
-      submitItem();
-      delay(750 + me.ping);
-      let item = me.findItem(-1, sdk.items.mode.inStorage, sdk.storage.Inventory);
-      item && item.toCursor() && Storage.Inventory.MoveTo(item);
-      return true;
-    } catch (e) {
-      return false;
-    }
-  };
-
   /**
-   * Travel to the next act the way a rushee does (Warriv, Jerhyn + Meshif, the red portal, Tyrael)
-   * @param {number} act
-   * @param {string} rusherName
+   * We are the rusher (a follower in the rushee's game): run kolbot's AutoRush steps it still needs,
+   * then end the rush game ("quit") so the next game is normal party play.
+   * @param {object} ls - the rushee's (leader's) game file
+   * @returns {number} the rush step
    */
-  const rushChangeAct = function (act, rusherName) {
-    rushRevive();
-    act = Number(act);
-    if (!act || me.act >= act) return true;
-    const before = me.area;
+  const runAsRusher = function (ls) {
+    let lib = null;
     try {
-      switch (act) {
-      case 2:
-        !me.inTown && Town.goToTown();
-        if (!Town.npcInteract("Warriv", false)) return false;
-        Misc.useMenu(sdk.menu.GoEast);
-        break;
-      case 3:
-        !me.inTown && Town.goToTown();
-        // the rusher leaves a portal in the Harem, next to Jerhyn
-        Town.move("portalspot");
-        if (Pather.usePortal(sdk.areas.HaremLvl1, rusherName)) {
-          Pather.moveToExit(sdk.areas.LutGholein, true);
-        }
-        if (!Town.npcInteract("Jerhyn")) return false;
-        me.cancel();
-        if (Pather.moveToExit(sdk.areas.HaremLvl1, true)) {
-          Pather.usePortal(sdk.areas.LutGholein, rusherName) || Pather.usePortal(sdk.areas.LutGholein);
-        }
-        if (!Town.npcInteract("Meshif", false)) return false;
-        Misc.useMenu(sdk.menu.SailEast);
-        break;
-      case 4:
-        if (me.inTown) {
-          Town.npcInteract("Cain");
-          Town.move("portalspot");
-          if (!Pather.usePortal(sdk.areas.DuranceofHateLvl3, rusherName)) return false;
-        }
-        Pather.moveTo(17591, 8070);
-        Pather.useUnit(sdk.unittype.Object, sdk.objects.RedPortalToAct4, sdk.areas.PandemoniumFortress);
-        break;
-      case 5:
-        !me.inTown && Town.goToTown();
-        Town.npcInteract("Tyrael", false);
-        delay(me.ping + 1);
-        if (Game.getObject(sdk.objects.RedPortalToAct5)) {
-          me.cancel();
-          Pather.useUnit(sdk.unittype.Object, sdk.objects.RedPortalToAct5, sdk.areas.Harrogath);
-        } else {
-          Misc.useMenu(sdk.menu.TravelToHarrogath);
-        }
-        break;
-      default:
-        return true;
-      }
-      delay(1000 + me.ping * 2);
-      Misc.poll(function () {
-        return !!me.area;
-      }, Time.seconds(10), 250);
-      if (me.area === before) {
-        me.cancel();
-        Town.move("portalspot");
-        return false;
-      }
-      if (me.act === 2 && Game.getNPC(NPC.Jerhyn)) {
-        Town.npcInteract("Jerhyn");
-      } else if (me.act === 3) {
-        Town.npcInteract("Hratli");
-      }
-      log(me.name + " is now in act " + me.act);
-      return true;
+      lib = require("../../systems/autorush/AutoRush");
     } catch (e) {
-      console.warn("Party :: act change to " + act + " failed - " + (e.message || e));
-      return false;
+      log("Rush: couldn't load kolbot's AutoRush (" + (e.message || e) + ")", true);
+      return ls.step;
     }
-  };
-
-  /** rusher said "1": come through its portal to where it is */
-  const rusheeIn = function (rusherName) {
-    rushRevive();
-    const area = rosterArea(rusherName);
-    if (!area || sdk.areas.Towns.includes(area)) {
-      log("Rush: " + rusherName + " isn't out in an area yet (" + (area ? getAreaName(area) : "unknown") + ")");
-      return false;
-    }
-    const act = sdk.areas.actOf(area);
-    !me.inTown && Town.goToTown();
-    me.act !== act && me.accessToAct(act) && Town.goToTown(act);
-    Town.move("portalspot");
-    const take = function () {
-      // the portal can take a moment to show up - keep looking from the portal spot
-      let found = null;
-      for (let i = 0; i < 3 && !found; i += 1) {
-        i > 0 && Town.move("portalspot");
-        found = Misc.poll(function () {
-          return Pather.getPortal(area, rusherName);
-        }, Time.seconds(10), 250);
-      }
-      if (!found) {
-        log("Rush: can't see " + rusherName + "'s portal to " + getAreaName(area) + " from " + getAreaName(me.area));
-        return false;
-      }
-      let used = Pather.usePortal(area, rusherName);
-      log(used ? "Rush: took " + rusherName + "'s portal to " + getAreaName(area) : "Rush: couldn't use " + rusherName + "'s portal to " + getAreaName(area));
-      return used;
-    };
-    me.overhead("Party: taking " + rusherName + "'s portal to " + getAreaName(area));
-    switch (area) {
-    case sdk.areas.CatacombsLvl4: {
-      if (!take()) return false;
-      let p = Pather.getPortal(null, rusherName);
-      p && Pather.walkTo(p.x, p.y);
-      return true;
-    }
-    case sdk.areas.DurielsLair:
-      if (!take()) return false;
-      // stay long enough for the rusher to see us here (it checks about once a second) - that's what it waits for
-      delay(3000);
-      tyraelTalk(rusherName);
-      return true;
-    case sdk.areas.ChaosSanctuary:
-      if (!take()) return false;
-      Pather.moveTo(7762, 5268);
-      delay(500);
-      Pather.walkTo(7763, 5267, 2);
-      return true;
-    default:
-      if (isTalTomb(area)) {
-        if (!take()) return false;
-        placeStaff();
-        // let the rusher see us at the orifice before we head back
-        delay(3000);
-        Pather.usePortal(sdk.areas.LutGholein, rusherName) || Pather.usePortal(null, rusherName) || Town.goToTown();
-        Town.move("portalspot");
-        return true;
-      }
-      return take();
-    }
-  };
-
-  /** rusher said "2": the boss is dead - back to town through its portal */
-  const rusheeOut = function (rusherName) {
-    rushRevive();
-    if (me.inTown) return true;
-    const town = sdk.areas.townOf(me.area);
-    Pather.usePortal(town, rusherName) || Pather.usePortal(null, rusherName) || Town.goToTown();
-    me.inTown && Town.move("portalspot");
-    return me.inTown;
-  };
-
-  /**
-   * read the rusher's calls since `afterSeq`
-   * @returns {{ n: number, msg: string, tick: number }[]}
-   */
-  const rusherCalls = function (afterSeq) {
-    let info = Party.readGameFile(leader);
-    if (!info || !sameGame(info.game) || !Array.isArray(info.said)) return [];
-    return info.said.filter(function (s) {
-      return s && s.n > afterSeq;
+    const rusheeName = Party.charNameOf(leader);
+    const seqs = RUSH_STEPS.map(function (st) {
+      return st[0];
+    }).filter(function (n) {
+      return Array.isArray(ls.rushSeqs) && ls.rushSeqs.includes(n);
     });
-  };
-  const lastCallSeq = function () {
-    let calls = rusherCalls(0);
-    return calls.length ? calls[calls.length - 1].n : 0;
-  };
-
-  /**
-   * New calls from the rusher: from its party file, or - if it can't record what it says - from game chat.
-   * @param {string} rusherName
-   */
-  const callReader = function (rusherName) {
-    let ls = Party.readGameFile(leader);
-    const st = { seen: ls && typeof ls.rushSeq === "number" ? ls.rushSeq : lastCallSeq(), chat: [] };
-    const onChat = function (nick, msg) {
-      nick === rusherName && msg && st.chat.push(String(msg));
-    };
-    try {
-      addEventListener("chatmsg", onChat);
-    } catch (e) {
-      // no chat events - the party file is all we have
-    }
-    return {
-      /** @returns {string[]} */
-      next: function () {
-        let info = Party.readGameFile(leader);
-        let fromFile = !!(info && info.sayTracked);
-        let out = [];
-        if (fromFile) {
-          rusherCalls(st.seen).forEach(function (c) {
-            st.seen = c.n;
-            out.push(String(c.msg || ""));
-          });
-          st.chat.length = 0;
-        } else {
-          out = st.chat.splice(0, st.chat.length);
-        }
-        return out.map(function (m) {
-          return m.trim().toLowerCase();
-        });
-      },
-      stop: function () {
-        try {
-          removeEventListener("chatmsg", onChat);
-        } catch (e) {
-          // ignore
-        }
-      },
-    };
-  };
-
-  /**
-   * Follower: we're the one being rushed. Do what the rusher calls until the rush is over.
-   * @returns {number} last rush step seen
-   */
-  const rusheeLoop = function () {
-    const rusherName = Party.charNameOf(leader);
-    const calls = callReader(rusherName);
-    let last = 0;
-    let lost = 0;
-    const queue = [];
-    let retries = 0;
-    /** step:area we already went into this step (so the portal fallback doesn't send us in twice) */
-    const visited = {};
-    let outSince = 0;
-    let doneSince = 0;
-    const questDone = function (q) {
-      try {
-        return Misc.checkQuest(q, sdk.quest.states.Completed) || Misc.checkQuest(q, sdk.quest.states.ReqComplete);
-      } catch (e) {
-        return false;
-      }
-    };
-    let lastLook = 0;
-    let step = 0;
-    const rushAreas = [sdk.areas.CatacombsLvl4, sdk.areas.DurielsLair, sdk.areas.DuranceofHateLvl3, sdk.areas.ChaosSanctuary];
-    const queueCall = function (m, why) {
-      if (queue.indexOf(m) > -1) return;
-      queue.push(m);
-      log("Rush: " + (why || rusherName + " says '" + m + "'"));
-    };
-    Party.state.running = "being rushed";
+    _rushChat = true;
+    Party.state.running = "rushing " + rusheeName;
     Party.writeGame();
-    log(me.name + " is being rushed by " + rusherName, true);
-    try {
-      let rf = Party.readGameFile(leader);
-      log("Rush: listening for " + rusherName + "'s calls (" + (rf && rf.sayTracked ? "party file" : "game chat") + "), and following its portals");
-    } catch (e) {
-      // ignore
+    log("Rushing " + rusheeName + ": " + seqs.join(", "), true);
+    // kolbot's Rushee takes its orders from whoever says this
+    say("i am rusher");
+
+    for (let n of seqs) {
+      if (!Party.keepAlive() || me.dead || !Party.inGame(leader)) break;
+      Party.state.running = "rushing " + rusheeName + ": " + n;
+      Party.writeGame();
+      log("Rush: " + n, true);
+      let ok = false;
+      try {
+        Town.doChores();
+        ok = lib[n](rusheeName) !== false;
+      } catch (e) {
+        log("Rush: " + n + " failed - " + (e.message || e), true);
+      }
+      if (!ok) {
+        log("Rush stopped at " + n + " - " + rusheeName + " gets another go next game", true);
+        break;
+      }
     }
+    // done: end the rush game, everyone starts a fresh one (normal party play from where the rushee is now)
     try {
       !me.inTown && Town.goToTown();
-      Town.move("portalspot");
-      while (true) {
-        if (!Party.keepAlive() || _leaderGone) break;
-        let ls = Party.readGameFile(leader);
-        if (!ls || !sameGame(ls.game) || !Party.inGame(leader)) {
-          !lost && (lost = getTickCount());
-          if (getTickCount() - lost > Time.seconds(settings.LeaderLostTimeout)) break;
-          delay(500);
-          continue;
-        }
-        lost = 0;
-        const rushing = ls.phase === "run" && String(ls.script || "").indexOf("rush:") === 0;
-        rushing && (last = ls.step);
-        step = ls.step || step;
-
-        calls.next().forEach(function (m) {
-          if (m === RUSH_IN || m === RUSH_OUT || m.indexOf("changeact") === 0) queueCall(m);
-        });
-        if (!rushing && !queue.length) break;
-
-        me.dead && rushRevive();
-        const rArea = rosterArea(rusherName);
-
-        // no call (yet)? follow what the rusher is actually doing
-        if (!queue.length && rArea) {
-          const rTown = sdk.areas.Towns.includes(rArea);
-          if (me.inTown && !rTown && (rushAreas.includes(rArea) || isTalTomb(rArea)) && !visited[step + ":" + rArea]
-            && Date.now() - lastLook > 3000) {
-            lastLook = Date.now();
-            if (Pather.getPortal(rArea, rusherName)) {
-              queueCall(RUSH_IN, "no call from " + rusherName + " yet, but its portal to " + getAreaName(rArea) + " is open - going in");
-            }
-          }
-          // out in the field and the rusher has left us here - head back
-          if (!me.inTown && rArea !== me.area) {
-            !outSince && (outSince = Date.now());
-            Date.now() - outSince > 6000 && queueCall(RUSH_OUT, rusherName + " left " + getAreaName(me.area) + " - going back to town");
-          } else {
-            outSince = 0;
-          }
-        }
-        // the boss we're here for is dead (our quest log says so) - move on to the next act like the rusher
-        // would tell us to (it waits for us there before the next boss)
-        const boss = rushOrder().find(function (r) {
-          return "rush:" + r.name === String(ls.script || "");
-        });
-        if (!queue.length && boss && me.act === boss.act && questDone(boss.quest)) {
-          !doneSince && (doneSince = Date.now());
-          Date.now() - doneSince > 6000 && queueCall("changeact " + (boss.act + 1), boss.name + " is done - heading to act " + (boss.act + 1));
-        } else {
-          doneSince = 0;
-        }
-
-        if (queue.length) {
-          let cmd = queue[0];
-          let ok = false;
-          const inArea = cmd === RUSH_IN ? rArea : 0;
-          try {
-            if (cmd === RUSH_IN) ok = rusheeIn(rusherName);
-            else if (cmd === RUSH_OUT) ok = rusheeOut(rusherName);
-            else ok = rushChangeAct(Number(cmd.replace(/[^0-9]/g, "")), rusherName);
-          } catch (e) {
-            console.warn("Party :: rush call '" + cmd + "' failed - " + (e.message || e));
-          }
-          ok && inArea && (visited[step + ":" + inArea] = Date.now());
-          if (ok) {
-            queue.shift();
-            retries = 0;
-          } else if (++retries > 6) {
-            log("Rush: gave up on '" + cmd + "' after " + retries + " tries");
-            queue.shift();
-            retries = 0;
-          } else {
-            log("Rush: '" + cmd + "' didn't work (try " + retries + "), trying again");
-            delay(3000);
-          }
-        } else if (me.inTown) {
-          try {
-            me.needHealing() && Town.heal();
-          } catch (e) {
-            // ignore
-          }
-          me.overhead("Party: waiting for " + rusherName + " (rush)");
-        }
-        delay(250);
-      }
-    } finally {
-      calls.stop();
-      Party.state.running = "";
-      Party.writeGame();
+      delay(3000);
+      log("Rush finished - ending the rush game", true);
+      say("quit");
+    } catch (e) {
+      // ignore
     }
-    return last;
+    Party.state.running = "";
+    Party.writeGame();
+    return ls.step;
   };
 
   /**
-   * Follower that isn't being rushed: wait in town (the rusher waits for everyone to be in the
-   * next act's town before it moves on), following its act changes.
-   * @returns {number} last rush step seen
+   * Neither rushing nor being rushed: wait in town and follow the act changes (the rusher waits for
+   * the whole party to be in the next act's town before it moves on).
+   * @returns {number} the rush step
    */
   const rushWait = function () {
-    const rusherName = Party.charNameOf(leader);
-    const calls = callReader(rusherName);
-    let wantAct = 0;
     let last = 0;
     let lost = 0;
+    let noAccessLogged = 0;
     Party.state.running = "waiting in town (rush)";
     Party.writeGame();
     try {
@@ -2266,30 +1887,28 @@
           continue;
         }
         lost = 0;
-        if (!(ls.phase === "run" && String(ls.script || "").indexOf("rush:") === 0)) break;
+        if (!(ls.phase === "run" && ls.script === "rush")) break;
         last = ls.step;
-        calls.next().forEach(function (msg) {
-          let m = /^changeact\s*(\d)/.exec(msg);
-          m && (wantAct = Math.max(wantAct, Number(m[1])));
-        });
-        // follow the act changes: from the rusher's calls, where the rusher is, or where the one being rushed is
-        let rusheeInfo = ls.rushee ? Party.readGame(ls.rushee) : null;
-        const act = Math.max(wantAct, ls.act || 0, (rusheeInfo && rusheeInfo.act) || 0) || me.act;
+        // follow the one being rushed (it changes act first), or the rusher if it got there before us
+        let rusherInfo = ls.rusher ? Party.readGame(ls.rusher) : null;
+        const act = Math.max(ls.act || 0, (rusherInfo && rusherInfo.inTown && rusherInfo.act) || 0) || me.act;
         try {
           !me.inTown && Town.goToTown();
           if (me.act !== act && me.accessToAct(act)) {
             Town.goToTown(act);
             Town.move("portalspot");
+          } else if (me.act !== act && act !== noAccessLogged) {
+            noAccessLogged = act;
+            log("Rush: can't go to act " + act + " yet (not unlocked on this character) - waiting here", true);
           }
           townChores();
         } catch (e) {
           // ignore, try again next time round
         }
-        me.overhead("Party: waiting in town while " + rusherName + " rushes");
+        me.overhead("Party: waiting in town while " + (Party.charNameOf(ls.rusher || "") || "the rusher") + " rushes " + (ls.charName || leader));
         delay(1000);
       }
     } finally {
-      calls.stop();
       Party.state.running = "";
       Party.writeGame();
     }
@@ -2346,11 +1965,11 @@
     let step = 0;
     let stop = false;
 
-    // someone far behind and we can teleport: rush them through the act bosses first
+    // we're far behind and the party has a teleporter: get rushed through the acts first (we made the game, like kolbot's AutoRush wants)
     try {
       let rush = Party.rushPlan();
-      if (rush && rush.rusher === myProfile && Party.inGame(rush.rushee)) {
-        step = runRush(rush, step);
+      if (rush && rush.rushee === myProfile && Party.inGame(rush.rusher)) {
+        step = runAsRushee(rush, step);
       }
     } catch (e) {
       console.warn("Party :: rush failed - " + (e.message || e));
@@ -2569,9 +2188,9 @@
         continue;
       }
 
-      // the leader is rushing someone: the rushee answers its calls, everyone else waits in town
-      if (ls.phase === "run" && ls.step > handledRun && String(ls.script || "").indexOf("rush:") === 0) {
-        const lastStep = ls.rushee === myProfile ? rusheeLoop() : rushWait();
+      // the leader (game maker) is being rushed: the rusher runs kolbot's AutoRush steps, everyone else waits in town
+      if (ls.phase === "run" && ls.step > handledRun && ls.script === "rush") {
+        const lastStep = ls.rusher === myProfile ? runAsRusher(ls) : rushWait();
         handledRun = Math.max(handledRun, lastStep || ls.step);
         handledPlan = Math.max(handledPlan, handledRun);
         Party.state.doneStep = handledRun;
@@ -2973,7 +2592,7 @@
       } catch (e) {
         rush = null;
       }
-      hostWhy = rush && rush.rusher === leader ? " (rushing " + rush.rushee + ")" : " (furthest behind)";
+      hostWhy = rush && rush.rushee === leader ? " (furthest behind - " + rush.rusher + " rushes it)" : " (furthest behind)";
     }
     log("This game's host: " + leader + hostWhy, true);
 
@@ -2992,7 +2611,9 @@
           } catch (e) {
             // ignore
           }
-          return sayBeforeParty.apply(this, arguments);
+          // SoloPlay keeps chat silent (prints instead); kolbot's rush talks over chat, so say it for real then
+          const real = _rushChat && typeof global._say === "function" ? global._say : sayBeforeParty;
+          return real.apply(this, arguments);
         };
         global.say = sayWrapper;
         _sayTracked = global.say === sayWrapper;

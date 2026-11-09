@@ -47,7 +47,7 @@ SoloPlay makes the accounts and characters by itself the first time - leave **Ac
 - Before boss fights (Den, Andariel, Duriel, Mephisto...) it waits up to 45 seconds for the whole party.
 - The sorc teleports ahead to areas with no waypoint and opens a portal for everyone.
 - The barb casts **Battle Orders** whenever the party regroups.
-- A brand new character in a party that's already ahead gets **rushed** by the sorc through the act bosses to catch up.
+- A brand new character in a party that's already ahead makes the game and gets **rushed** by the sorc through the act bosses to catch up.
 - If the game maker leaves (chicken / death), the others leave too and wait for its next game.
 
 ## Watching them
