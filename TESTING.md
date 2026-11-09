@@ -55,7 +55,7 @@ Open an issue (or post in the thread) with:
 
 1. **What happened** and roughly **when** (time on your PC clock).
 2. Your **group**: how many characters, which classes, which is the leader, what act/difficulty.
-3. **The logs zip** - double-click **`Collect Logs.bat`** in your D2BotNG folder (or `d2bs\kolbot\libs\SoloPlay\Tools\CollectLogs\Collect Logs.bat`). It makes `PartyMode-Logs-<date>.zip` on your Desktop with the last 2 days of:
+3. **The logs zip** - double-click **`Collect Logs.bat`** in your D2BotNG folder (or `d2bs\kolbot\libs\SoloPlay\Tools\CollectLogs\Collect Logs.bat`). Using your own D2BotNG / D2Bot# setup, or an older drop-in without it? Grab **`CollectLogs.zip`** from the release, unzip it anywhere and run it - it asks for your bot folder. It makes `PartyMode-Logs-<date>.zip` on your Desktop with the last 2 days of:
    - `d2bs\logs\d2bs-<profile>-<date>.log` - the main log of every bot (search for `[Party]`)
    - `d2bs\kolbot\logs\ScriptErrorLog.txt` and `chicken-*.log` - crashes and low-life exits
    - `libs\SoloPlay\.soloplay\party\*.json` - live party state (who hosts, who's where)
