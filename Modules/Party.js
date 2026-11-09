@@ -41,6 +41,8 @@
     SyncDifficulty: true,
     AssistRange: 12,
     FollowDistance: 7,
+    // followers right next to a leader whose move keeps failing step behind it (narrow walkways, doors)
+    MakeWay: true,
     LeaderLedScripts: true,
     LeaderPortals: true,
     LeaderWaits: true,
@@ -689,6 +691,8 @@
   };
   /** @type {{ gid: number, classid: number, x: number, y: number, area: number, tick: number } | null} */
   let _target = null;
+  /** our last blocked move (see Party.noteBlocked) */
+  let _blocked = null;
   /** last overhead message (shown on the Party Dashboard) */
   let _lastSay = null;
 
@@ -748,6 +752,7 @@
         diff: DIFFS[me.diff] || "",
         dead: !!me.dead,
         target: (_target && Date.now() - _target.tick < 3000) ? _target : null,
+        blocked: (_blocked && Date.now() - _blocked.tick < 3000) ? _blocked : null,
         canTele: canTele(),
         progress: myProgress(),
         townTrip: trackTownTrip(),
@@ -778,6 +783,23 @@
    * Monster gids are the same for every player in the game.
    * @param {Monster} unit
    */
+  /**
+   * Our own move keeps failing (SoloPlay's Pather.move retry) - tell the party, so helpers standing in our way
+   * (narrow walkways, temple doors) step aside.
+   * @param {{x: number, y: number}} dest - where we're trying to get to
+   */
+  Party.noteBlocked = function (dest) {
+    try {
+      // only the one running its own script - helpers bumping into each other doesn't need a reshuffle
+      if (!enabled || !_leaderBusy || !dest || me.inTown) return;
+      let fresh = !_blocked || Date.now() - _blocked.tick > 1500;
+      _blocked = { x: me.x, y: me.y, tx: dest.x, ty: dest.y, area: me.area, tick: Date.now() };
+      fresh && Date.now() - _lastGameWrite > 250 && Party.writeGame();
+    } catch (e) {
+      // ignore
+    }
+  };
+
   Party.noteTarget = function (unit) {
     try {
       if (!unit || !unit.gid) return;
@@ -1148,7 +1170,7 @@
 
   const notePath = function () {
     try {
-      if (_taxiPath && me.area && !me.inTown && _taxiPath[_taxiPath.length - 1] !== me.area) _taxiPath.push(me.area);
+      if (_taxiPath && me.area && !me.inTown && (!_taxiPath.length || _taxiPath[_taxiPath.length - 1] !== me.area)) _taxiPath.push(me.area);
     } catch (e) {
       // ignore
     }
@@ -1454,16 +1476,62 @@
   let _lastBOGather = 0;
   /** life we last saw while holding at a portal */
   let _holdWatch = null;
+  /** make way: the blocked move we already stepped aside for, and until when we stay back */
+  let _madeWayFor = 0;
+  let _makeWayUntil = 0;
+
+  /**
+   * Step to a spot behind the one we're helping (away from where they're trying to go) and stay back a moment.
+   * @param {number} lx - their x
+   * @param {number} ly - their y
+   * @param {{tx: number, ty: number}} blocked - where they're trying to get to
+   */
+  const makeWay = function (lx, ly, blocked, name) {
+    let dx = lx - blocked.tx, dy = ly - blocked.ty;
+    let len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) {
+      // no direction - just get off their spot
+      dx = me.x - lx; dy = me.y - ly; len = Math.sqrt(dx * dx + dy * dy) || 1;
+    }
+    dx /= len; dy /= len;
+    // each helper takes its own angle so we don't all pile onto the same spot
+    const slot = Math.max(0, followers.indexOf(myProfile));
+    const angles = [0, 0.6, -0.6, 1.1, -1.1, 1.6, -1.6];
+    const first = slot % 3;
+    const order = angles.slice(first).concat(angles.slice(0, first));
+    for (let a of order) {
+      for (let dist of [7, 5, 10]) {
+        let x = Math.round(lx + (dx * Math.cos(a) - dy * Math.sin(a)) * dist);
+        let y = Math.round(ly + (dx * Math.sin(a) + dy * Math.cos(a)) * dist);
+        try {
+          if (typeof Attack.validSpot === "function" && !Attack.validSpot(x, y)) continue;
+          me.overhead("Party: making way for " + (name || "the leader"));
+          Pather.moveTo(x, y, 2);
+          _makeWayUntil = getTickCount() + Time.seconds(4);
+          return true;
+        } catch (e) {
+          // try the next spot
+        }
+      }
+    }
+    _makeWayUntil = getTickCount() + Time.seconds(2);
+    return false;
+  };
+
+  /** leader targets we couldn't get into position for: gid -> retry after (ms) */
+  const _unreachable = {};
 
   const focusFire = function (profile, name) {
     const start = getTickCount();
     let attacked = false;
+    let fails = 0;
 
     while (getTickCount() - start < Time.seconds(4)) {
       let info = Party.readGameFile(profile);
       let t = info && sameGame(info.game) ? info.target : null;
       if (!t || !t.gid || Date.now() - t.tick > 3000 || t.area !== me.area) break;
 
+      if (_unreachable[t.gid] && Date.now() < _unreachable[t.gid]) break;
       let mon = Game.getMonster(-1, -1, t.gid);
       if (!mon || mon.dead || !mon.attackable) break;
       // too far from the person we're helping - probably a stale target, go to them instead
@@ -1473,7 +1541,19 @@
 
       try {
         Party.noteTarget(mon);
-        ClassAttack[me.classid].doAttack(mon, !attacked);
+        let result = ClassAttack[me.classid].doAttack(mon, !attacked);
+        // couldn't get into position (behind a wall, across a gap) - leave it to the others for a bit
+        // instead of retrying it over and over
+        if (result === Attack.Result.FAILED || result === Attack.Result.CANTATTACK
+          || (Attack.Result.FAILED_POSITION !== undefined && result === Attack.Result.FAILED_POSITION)) {
+          fails += 1;
+          if (fails >= 2) {
+            _unreachable[t.gid] = Date.now() + Time.seconds(15);
+            break;
+          }
+        } else {
+          fails = 0;
+        }
         attacked = true;
       } catch (e) {
         console.warn("Party :: focus fire error - " + (e.message || e));
@@ -1611,13 +1691,24 @@
         }
       }
 
+      // 0b. they're stuck trying to move and we're right next to them - probably in their way: step behind them
+      let blocked = info && sameGame(info.game) ? info.blocked : null;
+      if (settings.MakeWay && blocked && blocked.area === me.area && Date.now() - blocked.tick < 3000
+        && blocked.tick !== _madeWayFor && getTickCount() >= _makeWayUntil && tx && ty && getDistance(me.x, me.y, tx, ty) <= 8) {
+        _madeWayFor = blocked.tick;
+        makeWay(tx, ty, blocked, name);
+        return true;
+      }
+      // just stepped aside - don't walk straight back into the doorway
+      const holdBack = getTickCount() < _makeWayUntil;
+
       // 1. hit their target first
-      if (focusFire(profile, name)) {
+      if (!holdBack && focusFire(profile, name)) {
         return true;
       }
 
       // 2. no target - stay right on them
-      if (tx && ty && getDistance(me.x, me.y, tx, ty) > settings.FollowDistance) {
+      if (!holdBack && tx && ty && getDistance(me.x, me.y, tx, ty) > settings.FollowDistance) {
         try {
           Pather.moveNear(tx, ty, Math.max(3, settings.FollowDistance - 3));
         } catch (e) {
@@ -2653,6 +2744,8 @@
   Party.initInGame = function () {
     if (!Party.enabled || _initialized) return false;
     _initialized = true;
+    // SoloPlay's Pather.move calls this when a move keeps failing (see PatherOverrides)
+    global.__partyNoteBlocked = Party.noteBlocked;
 
     // who made this game is the host for this game
     let gameHost = "";

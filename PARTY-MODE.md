@@ -105,6 +105,7 @@ Diablo II 1.14d can't scale its window; stretching add-ons like cnc-ddraw rescal
 | `WaitDistance` | 25 | Yards back that counts as "behind" |
 | `MaxWaitSeconds` | 8 | Longest catch-up pause (only right after a move) |
 | `HostRotation` | true | Furthest-behind member hosts the games, everyone joins to catch it up |
+| `MakeWay` | true | Helpers right next to a leader that keeps failing to move step behind it for a few seconds (narrow walkways, doors) |
 | `Rush` | true | The party's teleporter rushes a far-behind member through the act bosses |
 | `RushWhenBehindActs` | 1 | How many acts behind (another difficulty = always) before rushing |
 | `Rusher` | "" | Profile that rushes; empty = highest level member that can teleport |

@@ -849,6 +849,8 @@ Pather.move = function (target, givenSettings = {}) {
         if (fail > 0) {
           console.debug("move retry " + fail);
           Packet.flash(me.gid);
+          // party mode: tell helpers standing in our way to step aside
+          typeof global.__partyNoteBlocked === "function" && global.__partyNoteBlocked(target);
 
           if (fail >= settings.retry) {
             console.log("Failed move: Retry = " + settings.retry);

@@ -86,6 +86,13 @@
     FollowDistance: 7,
 
     /**
+     * @desc - when the one we're helping keeps failing to move (narrow walkways, temple doors), helpers standing
+     * right next to it step behind it for a few seconds so they're not in the way.
+     * @type {boolean}
+     */
+    MakeWay: true,
+
+    /**
      * @desc - when there is no shared target, helpers only clear monsters this close to them (yards).
      *   Keep it small so they don't wander off from the person they are following.
      */
