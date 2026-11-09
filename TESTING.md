@@ -55,12 +55,17 @@ Open an issue (or post in the thread) with:
 
 1. **What happened** and roughly **when** (time on your PC clock).
 2. Your **group**: how many characters, which classes, which is the leader, what act/difficulty.
-3. The **logs** for each profile, around that time:
-   - `d2bs\logs\d2bs-<PROFILE>-<date>.log` (the main one - search for `[Party]`)
-   - `d2bs\kolbot\logs\ScriptErrorLog.txt` (if a bot crashed or left the game)
-   - optional: `d2bs\kolbot\libs\SoloPlay\.soloplay\party\*.game.json` (live party state)
+3. **The logs zip** - double-click **`Collect Logs.bat`** in your D2BotNG folder (or `d2bs\kolbot\libs\SoloPlay\Tools\CollectLogs\Collect Logs.bat`). It makes `PartyMode-Logs-<date>.zip` on your Desktop with the last 2 days of:
+   - `d2bs\logs\d2bs-<profile>-<date>.log` - the main log of every bot (search for `[Party]`)
+   - `d2bs\kolbot\logs\ScriptErrorLog.txt` and `chicken-*.log` - crashes and low-life exits
+   - `libs\SoloPlay\.soloplay\party\*.json` - live party state (who hosts, who's where)
+   - `libs\SoloPlay\.soloplay\<profile>\*Performance.csv` - levels and scripts over time
+   - `libs\SoloPlay\Settings\PartySettings.js` - your party setup
+   - D2BotNG's own `logs\d2bot-*.log`, plus `info.txt` (versions and profile names/scripts)
 
-**Before you post logs**, remove anything private: account names, passwords, CD keys, proxies. The `.oog.json` party files contain the **game password** - don't post those publicly.
+   Account names, passwords, CD keys, proxy logins, game passwords, IP addresses and your Windows user name are **taken out** of every file before it's zipped. Character names stay in (the logs are useless without them) - look the zip over before posting it publicly.
+
+   Older problem? Run it with more days: `powershell -ExecutionPolicy Bypass -File CollectLogs.ps1 -Days 5`.
 
 ## Known limits (beta)
 

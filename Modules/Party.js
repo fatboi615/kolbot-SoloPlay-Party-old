@@ -240,6 +240,43 @@
   let _frozenHost = "";
   let _hostCache = { tick: 0, value: "" };
 
+  /**
+   * Another member already hosting a live party game that we could join (the longest-running one).
+   * One party, one game: a would-be host joins it instead of starting a second game.
+   * @returns {{ profile: string, game: string, since: number, with: string[] } | null}
+   */
+  const liveHost = function () {
+    let found = null;
+    let want = rank(Party.myWantDiff());
+    for (let m of members) {
+      if (m === myProfile) continue;
+      let o = Party.readOog(m);
+      if (!o || !fresh(o, 20) || o.status !== "ingame" || !o.hosting || !o.game) continue;
+      // a game in a harder difficulty than we need is no use to us (we'd have to wait it out)
+      if (settings.SyncDifficulty && o.diff && rank(o.diff) > want) continue;
+      let since = o.hostingSince || o.tick;
+      if (!found || since < found.since) {
+        found = { profile: m, game: o.game, since: since, with: [] };
+      }
+    }
+    if (found) {
+      found.with = members.filter(function (m) {
+        if (m === found.profile || m === myProfile) return false;
+        let o = Party.readOog(m);
+        return !!o && fresh(o, 20) && o.status === "ingame" && lc(o.game || "") === lc(found.game);
+      });
+    }
+    return found;
+  };
+
+  const inGameNow = function () {
+    try {
+      return !!(me.ingame && me.gameReady && me.gamename);
+    } catch (e) {
+      return false;
+    }
+  };
+
   /** who should be making games right now */
   Party.hostProfile = function () {
     if (!enabled) return "";
@@ -261,6 +298,13 @@
       }
     }
     // a member far behind gets rushed in a game IT makes - that's already `best` (the furthest behind)
+
+    // ...but if another member is already hosting a live party game we can join, that's the party's game:
+    // join it instead of starting a second one (that split the party into two games for 1.5 hours)
+    if (best === myProfile && !inGameNow()) {
+      let live = liveHost();
+      if (live) best = live.profile;
+    }
     _hostCache = { tick: Date.now(), value: best || configuredLeader };
     return _hostCache.value;
   };
@@ -282,7 +326,8 @@
 
   /** out of game: remember whether the game we're making/joining is ours */
   Party.markHosting = function (hosting) {
-    Party.oogHeartbeat(true, { hosting: !!hosting });
+    // when this game started being the party's game - the longest-running host wins if two ever overlap
+    Party.oogHeartbeat(true, { hosting: !!hosting, hostingSince: hosting ? Date.now() : 0 });
   };
 
   let _progress = { tick: 0, value: null };
@@ -2118,6 +2163,26 @@
       );
     } else {
       log("No followers online, playing like solo but still in party mode", true);
+    }
+
+    // nobody came because the party is in another member's game (both of us decided to host): go join them
+    // rather than play alone - one party, one game
+    if (expected.length && !Party.activeFollowers().length) {
+      let live = liveHost();
+      if (live && live.with.length && !sameGame(live.game)) {
+        log(
+          "The party is in " + live.profile + "'s game (with " + live.with.join(", ") + ") - leaving to join it",
+          true
+        );
+        me.overhead("Party: everyone is in " + live.profile + "'s game - joining it");
+        Party.state.finishedGame = me.gamename || "";
+        Party.state.phase = "left";
+        Party.writeGame();
+        _hostCache = { tick: 0, value: "" };
+        scriptBroadcast("quit");
+        delay(5000);
+        return;
+      }
     }
 
     let step = 0;

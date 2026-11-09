@@ -39,6 +39,9 @@ Add a brand new character to a party that's already ahead and it doesn't have to
 - When it's done the sorc says "quit", everyone leaves, and the next game is normal party play - the new character is usually still the furthest behind, so it hosts and everyone helps it level.
 - If a rush fails 3 times in 3 hours without the new character reaching a new act, party mode stops trying and plays normally.
 
+### Collect Logs (for bug reports)
+`Collect Logs.bat` zips the last 2 days of party logs to your Desktop with accounts, passwords, CD keys, proxies, IP addresses and your Windows user name removed. See [TESTING.md](TESTING.md) for what's in it.
+
 ### Stream Overlay (D2BotNG console on stream)
 `Tools\StreamOverlay\console-overlay.html` shows D2BotNG's console like a stream chat box for Streamlabs / OBS: add it as a **Browser Source** (Local file, 480x600). It reads D2BotNG's live console on this PC; accounts, keys and proxies are hidden. Options and steps are in `Tools\StreamOverlay\README.md`.
 

@@ -9,7 +9,7 @@ Everything you need to run **4 SoloPlay characters in the same game, leveling to
 | `SCL-BARB` | Barbarian (Whirlwind) | Battle Orders for the party |
 | `SCL-NECRO` | Necromancer (Summon) | Follower |
 
-Included: **D2BotNG** (the manager), **kolbot** + **D2BS**, **Kolbot-SoloPlay with party mode**, the four profiles above set up as one party, and two helpers - **Arrange Bots** and **Bot Viewer**. No accounts, CD keys or proxies are included - you add your own CD keys.
+Included: **D2BotNG** (the manager), **kolbot** + **D2BS**, **Kolbot-SoloPlay with party mode**, the four profiles above set up as one party, and three helpers - **Arrange Bots**, **Bot Viewer** and **Collect Logs**. No accounts, CD keys or proxies are included - you add your own CD keys.
 
 ## You need
 
@@ -76,7 +76,7 @@ Every setting is explained in that file and in [PARTY-MODE.md](d2bs/kolbot/libs/
 
 - **Follower makes its own game / never waits for the leader** - check the profile names match `Groups` exactly and every profile uses `D2BotSoloPlay.dbj`.
 - **"Profile ... not found" in the game window** - save the profile once in D2BotNG (it rewrites `d2bs\d2bs.ini`).
-- **Report a bug** - see [TESTING.md](d2bs/kolbot/libs/SoloPlay/TESTING.md) for what logs to send. Remove account names, passwords and keys before posting logs.
+- **Report a bug** - double-click **`Collect Logs.bat`** and send the zip it puts on your Desktop (accounts, passwords, CD keys and proxies are taken out). See [TESTING.md](d2bs/kolbot/libs/SoloPlay/TESTING.md).
 
 ## Credits
 
