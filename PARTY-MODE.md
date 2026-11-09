@@ -54,6 +54,15 @@ Progress is kept in `.soloplay/party/<profile>.stuck.json` (delete it to cancel 
 
 Needs Windows 10/11 and the built-in Windows PowerShell - nothing to install.
 
+## Arrange Bots (game windows side by side, no overlap)
+
+`Tools\ArrangeBots\Arrange Bots.bat` (the full setup has an `Arrange Bots.bat` next to D2BotNG.exe):
+
+- Switches Diablo II to **640x480** so the windows are smaller - three fit across a 1920 wide screen, up to six on a 1080p monitor with no overlap. It's the game's own setting (kept in the registry, shared by every bot) and takes effect when each game restarts. The old value is saved to `ArrangeBots-resolution-backup.txt`; run `ArrangeBots.ps1 -Resolution 800` to go back.
+- **Lines every game window up** in a grid that fits your screen (worked out from the real window size, so any monitor works), shows hidden or minimized games, and keeps doing it while bots restart. Close its window to stop.
+
+Diablo II 1.14d can't scale its window; stretching add-ons like cnc-ddraw rescale the mouse messages D2BS clicks with, so they aren't used.
+
 ## Install
 
 1. Copy this folder over `d2bs/kolbot/libs/SoloPlay/`.

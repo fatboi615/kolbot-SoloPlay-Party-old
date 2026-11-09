@@ -55,6 +55,9 @@ SoloPlay makes the accounts and characters by itself the first time - leave **Ac
 
 ## Watching them
 
+Double-click **`Arrange Bots.bat`** to make the game windows smaller (640x480) and line them up side by side so none overlap - restart the bots once for the new size.
+
+
 Double-click **`Bot Viewer.bat`** (in this folder) for one window with a live picture of all three games side by side. Click a picture (or press 1-3) to jump to that game, and use **Tuck game windows behind this one** so the game windows stop overlapping your screen.
 
 ## Changing the party
