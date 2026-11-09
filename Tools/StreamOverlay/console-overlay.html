@@ -1,0 +1,416 @@
+<!doctype html>
+<!--
+  D2BotNG Console Overlay - shows D2BotNG's console like a stream chat box.
+
+  Streamlabs / OBS:  Add Source > Browser Source > tick "Local file" > pick this file.
+                     Width 700, Height 500 (any size works - lines stack from the bottom).
+                     Leave "Custom CSS" as it is (the page is already see-through).
+
+  Change the look in the SETTINGS block below (open this file in Notepad), or add them to the address
+  as ?name=value&name=value (untick "Local file" and use file:///C:/path/console-overlay.html?max=8).
+
+  Reads D2BotNG's live console from http://127.0.0.1:5000 on this PC (the same feed D2BotNG's own
+  window uses). It only shows console messages - nothing is sent anywhere.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2BotNG Console Overlay</title>
+<script>
+// ============================== SETTINGS ==============================
+window.OVERLAY_SETTINGS = {
+  server: "http://127.0.0.1:5000", // D2BotNG's address (Settings > Server in D2BotNG)
+  password: "",                    // only if you set a server password in D2BotNG
+
+  max: 16,          // most lines to show at once (fewer if they don't fit)
+  fade: 0,          // seconds before a line fades away like chat (0 = lines stay until pushed out)
+  history: true,    // show the last few lines already in D2BotNG's console when the overlay starts
+
+  profiles: "",     // only these bots, comma separated (e.g. "SCL-PAL,SCL-SORC"). Empty = all
+  system: true,     // show D2BotNG's own "System" messages
+  names: "",        // nicer names on stream, e.g. "SCL-PAL:Paladin,SCL-SORC:Sorceress"
+
+  time: false,      // show the time in front of each line
+  theme: "panel",   // "panel" = red D2Botting panel with a title, "chat" = just outlined text, "box" = each line on a dark box
+  title: "BOT CONSOLE", // panel title (empty = no title bar)
+  size: 16,         // text size in pixels
+  font: "",         // font name, e.g. "Consolas". Empty = a clean default
+
+  // lines that match are never shown (so accounts, keys and proxies don't end up on stream)
+  hide: "account|password|passw|cd ?key|cdkey|key in use|realm down on key|key disabled|proxy|\\bmule\\b",
+  party: true,      // show party mode's own lines ("[Party] ...")
+  demo: false,      // fake messages to preview the look without D2BotNG running
+};
+// ======================================================================
+</script>
+<style>
+  :root {
+    --size: 20px;
+    --font: "Segoe UI", "Trebuchet MS", system-ui, sans-serif;
+    --text: #f4f4f5;
+    --outline: rgba(0, 0, 0, .95);
+    --box: rgba(12, 12, 16, .62);
+    --time: #a1a1aa;
+    /* D2BotNG console colours, tuned for a dark game background */
+    --c0: #f4f4f5; --c4: #60a5fa; --c5: #4ade80; --c6: #d4a843; --c7: #c2884a;
+    --c8: #fb923c; --c9: #f87171; --c10: #a1a1aa;
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: var(--font); font-size: var(--size); line-height: 1.3; color: var(--text);
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  #lines { display: flex; flex-direction: column; gap: calc(var(--size) * .22); padding: calc(var(--size) * .4); }
+  .line {
+    font-weight: 600; word-wrap: break-word; overflow-wrap: anywhere;
+    animation: in .25s ease-out both; transition: opacity 1s ease;
+  }
+  .line.out { opacity: 0; }
+  .chat .line {
+    text-shadow: -1px -1px 0 var(--outline), 1px -1px 0 var(--outline), -1px 1px 0 var(--outline),
+      1px 1px 0 var(--outline), 0 0 4px var(--outline);
+  }
+  .box .line { background: var(--box); border-radius: calc(var(--size) * .35); padding: calc(var(--size) * .22) calc(var(--size) * .5); align-self: flex-start; max-width: 100%; box-sizing: border-box; }
+  .time { color: var(--time); font-weight: 500; margin-right: .4em; font-size: .85em; }
+  .who { font-weight: 800; margin-right: .45em; }
+  .who::after { content: ":"; color: var(--text); font-weight: 600; }
+  .status { font-size: .8em; color: var(--time); font-style: italic; }
+
+  /* panel: matches the red D2Botting logo */
+  :root { --red: #ec4a2c; --red-dim: rgba(236, 74, 44, .35); }
+  #frame { display: contents; }
+  .panel #frame {
+    display: flex; flex-direction: column; position: absolute; inset: 6px; box-sizing: border-box;
+    border: 2px solid var(--red); border-radius: 6px; overflow: hidden;
+    background:
+      linear-gradient(var(--red-dim) 1px, transparent 1px) 0 0 / 100% 28px,
+      linear-gradient(90deg, rgba(236, 74, 44, .12) 1px, transparent 1px) 0 0 / 28px 100%,
+      radial-gradient(ellipse at 50% 30%, #3d0d08 0%, #230705 70%, #1a0504 100%);
+    box-shadow: 0 0 14px rgba(236, 74, 44, .45), inset 0 0 0 5px rgba(20, 4, 3, .9), inset 0 0 0 6px var(--red-dim);
+  }
+  .panel #lines > :first-child { margin-top: auto; }
+  .panel #lines { flex: 1; min-height: 0; justify-content: flex-start; overflow: hidden; padding: calc(var(--size) * .55) calc(var(--size) * .7); }
+  .panel .line { text-shadow: 0 1px 2px rgba(0, 0, 0, .9); }
+  #title { display: none; }
+  .panel #title {
+    display: flex; align-items: center; gap: .6em; padding: .45em .7em .35em; flex: none;
+    font: 700 calc(var(--size) * 1.05) Georgia, "Times New Roman", serif; letter-spacing: .08em;
+    color: var(--red); text-shadow: 0 0 8px rgba(236, 74, 44, .55); border-bottom: 1px solid var(--red-dim);
+  }
+  .panel #title .chip {
+    font: 700 calc(var(--size) * .55) "Segoe UI", system-ui, sans-serif; letter-spacing: .12em;
+    border: 1px solid var(--red); border-radius: 3px; padding: .15em .5em; color: var(--red); text-shadow: none;
+  }
+  .panel #title .grow { flex: 1; text-align: center; }
+  .panel #title .dot { width: .5em; height: .5em; border-radius: 50%; background: #52525b; display: inline-block; margin-right: .35em; vertical-align: middle; }
+  .panel #title .live .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+<div id="frame">
+  <div id="title"><span class="chip">SYS</span><span class="grow"></span><span class="chip" id="live"><span class="dot"></span>BOT</span></div>
+  <div id="lines" aria-live="polite"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  // ---------- settings (file defaults, then ?name=value from the address) ----------
+  const S = Object.assign({}, window.OVERLAY_SETTINGS);
+  try {
+    new URLSearchParams(location.search).forEach(function (v, k) {
+      if (!(k in S)) return;
+      if (typeof S[k] === "number") S[k] = Number(v) || 0;
+      else if (typeof S[k] === "boolean") S[k] = !/^(0|false|no|off)$/i.test(v);
+      else S[k] = v;
+    });
+  } catch (e) { /* ignore */ }
+
+  const root = document.documentElement;
+  root.style.setProperty("--size", Math.max(8, S.size) + "px");
+  if (S.font) root.style.setProperty("--font", '"' + S.font + '", "Segoe UI", system-ui, sans-serif');
+  document.body.className = S.theme === "box" ? "box" : S.theme === "chat" ? "chat" : "panel chat";
+  document.querySelector("#title .grow").textContent = S.title || "";
+  if (!S.title) document.getElementById("title").style.display = "none";
+  const liveChip = document.getElementById("live");
+  const setLive = function (on) { liveChip.classList.toggle("live", !!on); };
+
+  const onlyProfiles = String(S.profiles || "").split(",").map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  const nameMap = {};
+  String(S.names || "").split(",").forEach(function (pair) {
+    const i = pair.indexOf(":");
+    if (i > 0) nameMap[pair.slice(0, i).trim().toLowerCase()] = pair.slice(i + 1).trim();
+  });
+  let hideRe = null;
+  try { hideRe = S.hide ? new RegExp(S.hide, "i") : null; } catch (e) { hideRe = null; }
+
+  const list = document.getElementById("lines");
+
+  // ---------- drawing ----------
+  // D2 in-text colour codes (ÿc0..ÿc;) -> colours
+  const D2 = { "0": "#f4f4f5", "1": "#f87171", "2": "#4ade80", "3": "#7c8cff", "4": "#d4a843", "5": "#a1a1aa",
+    "6": "#3f3f46", "7": "#d6c08f", "8": "#fb923c", "9": "#fde047", ":": "#15803d", ";": "#c084fc" };
+  const COLOR_VAR = { 0: "--c0", 4: "--c4", 5: "--c5", 6: "--c6", 7: "--c7", 8: "--c8", 9: "--c9", 10: "--c10" };
+  const MARK = /(?:\u00ffc|\\xffc)(.)/g;
+
+  function plain(text) { return String(text || "").replace(MARK, ""); }
+
+  /** text with D2 colour codes -> DOM spans */
+  function colored(text, base) {
+    const frag = document.createDocumentFragment();
+    let last = 0, color = base, m;
+    MARK.lastIndex = 0;
+    const push = function (s) {
+      if (!s) return;
+      const span = document.createElement("span");
+      span.textContent = s;
+      if (color) span.style.color = color;
+      frag.appendChild(span);
+    };
+    while ((m = MARK.exec(text))) {
+      push(text.slice(last, m.index));
+      color = D2[m[1]] || base;
+      last = MARK.lastIndex;
+    }
+    push(text.slice(last));
+    return frag;
+  }
+
+  /** a steady colour per bot name */
+  function nameColor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return "hsl(" + (h % 360) + " 85% 68%)";
+  }
+
+  function allowed(msg) {
+    const src = (msg.source || "").toLowerCase();
+    if (!S.system && src === "system") return false;
+    if (onlyProfiles.length && src !== "system" && onlyProfiles.indexOf(src) === -1) return false;
+    const text = plain(msg.content);
+    if (!text.trim()) return false;
+    if (!S.party && /^\[Party\]/.test(text)) return false;
+    if (hideRe && (hideRe.test(text) || hideRe.test(msg.source || ""))) return false;
+    return true;
+  }
+
+  function trim() {
+    while (list.children.length > Math.max(1, S.max)) list.removeChild(list.firstChild);
+    // drop the oldest lines that no longer fit in the box
+    while (list.children.length > 1 && list.scrollHeight > list.clientHeight + 1 && list.clientHeight > 0) list.removeChild(list.firstChild);
+  }
+
+  function show(msg) {
+    if (!allowed(msg)) return;
+    const age = msg.time ? (Date.now() - msg.time) / 1000 : 0;
+    if (S.fade > 0 && age > S.fade) return; // already gone in chat terms
+
+    const line = document.createElement("div");
+    line.className = "line";
+    if (S.time && msg.time) {
+      const t = document.createElement("span");
+      t.className = "time";
+      t.textContent = new Date(msg.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      line.appendChild(t);
+    }
+    const who = document.createElement("span");
+    who.className = "who";
+    const label = nameMap[(msg.source || "").toLowerCase()] || msg.source || "System";
+    who.textContent = label;
+    who.style.color = (msg.source || "System") === "System" ? "var(--time)" : nameColor(label);
+    line.appendChild(who);
+    const baseVar = COLOR_VAR[msg.color] || "--c0";
+    line.appendChild(colored(String(msg.content || ""), "var(" + baseVar + ")"));
+    list.appendChild(line);
+    trim();
+
+    if (S.fade > 0) {
+      const left = Math.max(0, S.fade - age) * 1000;
+      setTimeout(function () {
+        line.classList.add("out");
+        setTimeout(function () { line.remove(); }, 1100);
+      }, left);
+    }
+  }
+
+  let statusLine = null;
+  function status(text) {
+    if (statusLine) { statusLine.remove(); statusLine = null; }
+    if (!text) return;
+    statusLine = document.createElement("div");
+    statusLine.className = "line status";
+    statusLine.textContent = text;
+    list.appendChild(statusLine);
+  }
+
+  // ---------- protobuf (just enough to read d2bot.Event -> Message) ----------
+  const utf8 = new TextDecoder("utf-8");
+
+  function varint(buf, pos) {
+    let value = 0, mul = 1, b;
+    do {
+      if (pos.i >= buf.length) throw new Error("truncated varint");
+      b = buf[pos.i++];
+      value += (b & 0x7f) * mul;
+      mul *= 128;
+    } while (b & 0x80);
+    return value;
+  }
+
+  /** calls fn(field, wireType, buf, start, end, varintValue) for each field in buf[start..end) */
+  function fields(buf, start, end, fn) {
+    const pos = { i: start };
+    while (pos.i < end) {
+      const key = varint(buf, pos);
+      const field = Math.floor(key / 8), wire = key & 7;
+      if (wire === 0) { fn(field, 0, buf, 0, 0, varint(buf, pos)); }
+      else if (wire === 2) { const len = varint(buf, pos); const s = pos.i; pos.i += len; fn(field, 2, buf, s, pos.i, 0); }
+      else if (wire === 1) { pos.i += 8; }
+      else if (wire === 5) { pos.i += 4; }
+      else throw new Error("unsupported wire type " + wire);
+    }
+  }
+
+  /** d2bot.Event bytes -> console message or null (everything else in the stream is skipped) */
+  function readEvent(buf) {
+    let msg = null;
+    fields(buf, 0, buf.length, function (field, wire, b, s, e) {
+      if (field !== 10 || wire !== 2) return; // Event.message = 10
+      msg = { source: "", content: "", time: 0, color: 0, item: false };
+      fields(b, s, e, function (f, w, bb, ss, ee, v) {
+        if (f === 1 && w === 2) msg.source = utf8.decode(bb.subarray(ss, ee));
+        else if (f === 2 && w === 2) msg.content = utf8.decode(bb.subarray(ss, ee));
+        else if (f === 3 && w === 2) {
+          let sec = 0, nanos = 0;
+          fields(bb, ss, ee, function (tf, tw, b3, s3, e3, tv) {
+            if (tf === 1 && tw === 0) sec = tv;
+            else if (tf === 2 && tw === 0) nanos = tv;
+          });
+          msg.time = sec * 1000 + Math.floor(nanos / 1e6);
+        } else if (f === 4 && w === 0) msg.color = v;
+        else if (f === 5) msg.item = true;
+      });
+    });
+    return msg;
+  }
+
+  // ---------- gRPC-web stream from D2BotNG ----------
+  let connectedOnce = false;
+
+  async function connect() {
+    const url = String(S.server).replace(/\/+$/, "") + "/d2bot.EventService/StreamEvents";
+    const headers = { "content-type": "application/grpc-web+proto", "x-grpc-web": "1", "x-user-agent": "d2botng-console-overlay" };
+    if (S.password) headers["x-auth-password"] = S.password;
+
+    const res = await fetch(url, { method: "POST", headers: headers, body: new Uint8Array([0, 0, 0, 0, 0]), cache: "no-store" });
+    const st = res.headers.get("grpc-status");
+    if (!res.ok || (st && st !== "0")) {
+      const why = res.headers.get("grpc-message") || ("HTTP " + res.status);
+      throw new Error(decodeURIComponent(why));
+    }
+    if (!res.body) throw new Error("no stream");
+
+    // fresh start: D2BotNG sends its console history first, so rebuild from it
+    list.textContent = "";
+    statusLine = null;
+    const startedAt = Date.now();
+    // history comes in one burst right after connecting - only draw the last few of it
+    let pending = [];
+    let flushTimer = 0;
+    const flush = function () {
+      flushTimer = 0;
+      const last = pending.slice(-Math.max(1, S.max));
+      pending = [];
+      last.forEach(show);
+    };
+
+    const reader = res.body.getReader();
+    let buf = new Uint8Array(0);
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      const merged = new Uint8Array(buf.length + chunk.value.length);
+      merged.set(buf, 0);
+      merged.set(chunk.value, buf.length);
+      buf = merged;
+
+      let off = 0;
+      while (buf.length - off >= 5) {
+        const flag = buf[off];
+        const len = ((buf[off + 1] << 24) >>> 0) + (buf[off + 2] << 16) + (buf[off + 3] << 8) + buf[off + 4];
+        if (buf.length - off - 5 < len) break;
+        const frame = buf.subarray(off + 5, off + 5 + len);
+        off += 5 + len;
+        if (flag & 0x80) { // trailers
+          const t = utf8.decode(frame);
+          const m = /grpc-status:\s*(\d+)/i.exec(t);
+          if (m && m[1] !== "0") {
+            const mm = /grpc-message:\s*(.*)/i.exec(t);
+            throw new Error(mm ? decodeURIComponent(mm[1].trim()) : "stream error " + m[1]);
+          }
+          continue;
+        }
+        let msg = null;
+        try { msg = readEvent(frame); } catch (e) { msg = null; }
+        if (!msg) continue;
+        const isHistory = msg.time && msg.time < startedAt - 1000;
+        if (isHistory) {
+          if (!S.history || !allowed(msg)) continue;
+          pending.push(msg);
+          if (pending.length > 4 * Math.max(1, S.max)) pending = pending.slice(-Math.max(1, S.max));
+          clearTimeout(flushTimer);
+          flushTimer = setTimeout(flush, 250);
+          continue;
+        }
+        if (pending.length) { clearTimeout(flushTimer); flush(); }
+        show(msg);
+      }
+      buf = buf.slice(off);
+      connectedOnce = true;
+      setLive(true);
+      status("");
+    }
+  }
+
+  async function run() {
+    for (;;) {
+      try {
+        await connect();
+        status("");
+      } catch (e) {
+        setLive(false);
+        status(connectedOnce ? "D2BotNG disconnected - reconnecting..." : "Waiting for D2BotNG (" + S.server + ")...");
+      }
+      await new Promise(function (r) { setTimeout(r, 3000); });
+    }
+  }
+
+  // ---------- demo ----------
+  function demo() {
+    const sample = [
+      { source: "System", content: "Profile SCL-PAL started", color: 5 },
+      { source: "SCL-NECRO", content: "\u00ffc8[Party]\u00ffc0 This game's host: scl-necro (furthest behind)", color: 0 },
+      { source: "SCL-SORC", content: "\u00ffc8[Party]\u00ffc0 Sorcy teleporting ahead to Arreat Summit for ancients", color: 0 },
+      { source: "SCL-PAL", content: "\u00ffc8[Party]\u00ffc0 took Sorcy's portal to Arreat Summit", color: 0 },
+      { source: "SCL-BARB", content: "Picked up \u00ffc4Harlequin Crest\u00ffc0 (Shako)", color: 6 },
+      { source: "SCL-NECRO", content: "Kolbot-SoloPlay: starting ancients", color: 4 },
+      { source: "SCL-SORC", content: "Chicken - life 18%", color: 9 },
+    ];
+    let i = 0;
+    const next = function () {
+      const m = Object.assign({ time: Date.now() }, sample[i % sample.length]);
+      show(m);
+      i++;
+      setTimeout(next, 1400);
+    };
+    next();
+  }
+
+  if (S.demo) { setLive(true); demo(); } else run();
+})();
+</script>
+</body>
+</html>

@@ -39,6 +39,9 @@ Add a brand new character to a party that's already ahead and it doesn't have to
 - When it's done the sorc says "quit", everyone leaves, and the next game is normal party play - the new character is usually still the furthest behind, so it hosts and everyone helps it level.
 - If a rush fails 3 times in 3 hours without the new character reaching a new act, party mode stops trying and plays normally.
 
+### Stream Overlay (D2BotNG console on stream)
+`Tools\StreamOverlay\console-overlay.html` shows D2BotNG's console like a stream chat box for Streamlabs / OBS: add it as a **Browser Source** (Local file, 480x600). It reads D2BotNG's live console on this PC; accounts, keys and proxies are hidden. Options and steps are in `Tools\StreamOverlay\README.md`.
+
 ### Catch-up mode
 With host rotation the furthest-behind member hosts, so this is only needed when a follower is stuck on a quest but isn't the one furthest behind. When a follower fails the same quest in `CatchUpAfterFails` party games in a row, it switches to **catch-up mode**: it makes its own games and plays normal solo SoloPlay until those quests are done, then rejoins the party. The leader doesn't wait for it meanwhile and keeps making games in the difficulty it needs. After `MaxCatchUpGames` solo games it rejoins anyway.
 
