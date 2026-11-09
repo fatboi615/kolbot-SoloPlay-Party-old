@@ -6,13 +6,13 @@ Thanks for helping test! Party mode lets several **Kolbot-SoloPlay** characters 
 
 - **Diablo II + LoD 1.14d** (English) and one CD key per character.
 - All party characters on the **same PC**, same realm.
-- Full setup: nothing else. Drop-in: a D2BotNG + kolbot + Kolbot-SoloPlay install that already runs SoloPlay solo.
+- Full setup: nothing else - D2BotNG is included. Drop-in: a D2BotNG + kolbot + Kolbot-SoloPlay install that already runs SoloPlay solo.
 
 ## Two downloads - pick one
 
 | Download | For |
 |---|---|
-| **`SoloPlay-PartyMode-FullSetup-*.zip`** | Starting fresh. kolbot + D2BS + SoloPlay party mode with 3 party profiles (Pal leader, Sorc + Barb followers) ready to go - you add D2BotNG.exe, your CD keys and press start. Follow `START-HERE.md` inside. |
+| **`SoloPlay-PartyMode-FullSetup-*.zip`** | Starting fresh. Everything in one folder: D2BotNG, kolbot + D2BS, SoloPlay party mode, and 4 party profiles (Pal leader, Sorc, Barb, Necro) ready to go - add your CD keys and press start. Follow `START-HERE.md` inside. |
 | **`SoloPlay-PartyMode-DropIn-*.zip`** | You already run SoloPlay with D2BotNG. Just the `libs\SoloPlay` folder. |
 
 ## Install the drop-in (about 5 minutes)
