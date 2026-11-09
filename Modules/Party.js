@@ -1407,6 +1407,8 @@
    * @returns {boolean} true if we attacked something
    */
   let _lastBOGather = 0;
+  /** life we last saw while holding at a portal */
+  let _holdWatch = null;
 
   const focusFire = function (profile, name) {
     const start = getTickCount();
@@ -1498,13 +1500,33 @@
               // ignore
             }
           }
-          Attack.clear(10);
+          _holdWatch = _holdWatch || { hp: me.hp };
+          if (!defend(_holdWatch, 20)) {
+            // getting hurt waiting here - go wait in town instead
+            _holdWatch = null;
+            Town.goToTown();
+            return true;
+          }
           me.overhead("Party: holding at " + name + "'s portal");
           delay(250);
           return true;
         }
+        _holdWatch = null;
         if (!me.inTown || me.act !== act) {
-          me.accessToAct(act) ? Town.goToTown(act) : Town.goToTown();
+          let walked = false;
+          if (!me.inTown && me.act === act) {
+            // town is right next door (Blood Moor, Rocky Waste...) - walk, keep the town portal scrolls
+            try {
+              let here = getArea(me.area);
+              let next = !!here && here.exits.some(function (exit) {
+                return exit.target === area;
+              });
+              walked = next && Pather.moveToExit(area, true) && me.inTown;
+            } catch (e) {
+              walked = false;
+            }
+          }
+          !walked && (me.accessToAct(act) ? Town.goToTown(act) : Town.goToTown());
         }
         townChores();
         delay(500);
@@ -2312,6 +2334,25 @@
   };
 
   /**
+   * Standing still (waiting for the party / holding at a portal): fight back instead of soaking hits.
+   * Ranged monsters (quill rats, shamans, archers) shoot from well past melee range, so any loss of life
+   * means "clear around us", not just monsters right next to us.
+   * @param {{hp: number}} watch - keeps the last life we saw (start it with { hp: me.hp })
+   * @param {number} range - normal fight range
+   * @returns {boolean} false when life is getting low and we should stop waiting (normal play / chicken take over)
+   */
+  const defend = function (watch, range) {
+    let hit = me.hp < watch.hp;
+    try {
+      if (hit || monstersNear(range)) Attack.clear(hit ? Math.max(range, 30) : range);
+    } catch (e) {
+      // ignore
+    }
+    watch.hp = me.hp;
+    return !(me.hpPercent < 60 || (hit && me.hpPercent < 75));
+  };
+
+  /**
    * Follower: if the leader leaves the game (chicken, death, crash, game over) we leave too and wait for the next one.
    * Runs from the background worker, so it works even in the middle of a script.
    */
@@ -2446,7 +2487,7 @@
    * @param {number} seconds
    */
   const regroup = function (seconds) {
-    if (!seconds || !safeToWait()) return false;
+    if (!seconds || !safeToWait() || me.hpPercent < 60) return false;
     let helpers = myHelpers();
     if (!helpers.length) return false;
 
@@ -2470,15 +2511,13 @@
     _gather = { id: _gatherCount, area: me.area, until: Date.now() + Time.seconds(seconds) };
     Party.writeGame();
     let castBO = false;
+    const watch = { hp: me.hp };
     try {
       while (Date.now() < _gather.until) {
         if (me.dead || me.inTown) break;
-        if (monstersNear(15)) {
-          try {
-            Attack.clear(15);
-          } catch (e) {
-            // ignore
-          }
+        if (!defend(watch, 25)) {
+          log("Low on life while waiting for the party - carrying on");
+          break;
         }
         let waiting = notReady();
         if (!waiting.length) break;
@@ -2549,11 +2588,12 @@
     _waiting = true;
     try {
       const start = Date.now();
+      const startHp = me.hp;
       me.overhead("Party: waiting for " + behind.join(", "));
       while (Date.now() - start < Time.seconds(settings.MaxWaitSeconds)) {
         delay(250);
         Party.writeGame();
-        if (me.dead || me.inTown || monstersNear(20)) break;
+        if (me.dead || me.inTown || monstersNear(25) || me.hp < startHp) break;
         behind = lagging();
         if (!behind.length) break;
       }
